@@ -6,6 +6,8 @@
 - Personagem, nome, chapéu, uniforme (com a logo TX), cores e tamanho mudam em
   "Personalizar…" (clique direito) e ficam salvos em ~/.config/mascote-tx/config.json.
 - Personagens próprios: arquivos .json em personagens/ (veja personagens/coruja.json).
+- Luta de stickers: "Jogar luta" abre um jogo em que você controla um lutador no teclado
+  contra um bot ou contra um amigo no PC dele (um hospeda, o outro entra pelo IP).
 - Turma: "Adicionar personagem" cria outros mascotes (salvos em turma/), que lutam entre si
   com socos, rajadas e explosões até um nocaute.
 - Recebe os hooks do Claude Code em http://127.0.0.1:47900/evento; falas em /falar;
@@ -18,6 +20,8 @@ import math
 import os
 import random
 import re
+import socket
+import subprocess
 import sys
 import threading
 import time
@@ -38,6 +42,7 @@ CONF_DIR = os.path.expanduser("~/.config/mascote-tx")
 CONFIG = os.environ.get("MASCOTE_CONFIG") or os.path.join(CONF_DIR, "config.json")
 TURMA_DIR = os.path.join(os.path.dirname(CONFIG), "turma")  # um .json por personagem extra
 TURMA = []  # mascotes na tela; o primeiro é o principal (recebe os eventos do Claude Code)
+PORTA_JOGO = int(os.environ.get("MASCOTE_JOGO_PORTA", "47950"))  # partida online com amigo
 FPS = 30
 GRAV = 1.1
 TIPO = {"dock": Gdk.WindowTypeHint.DOCK, "utility": Gdk.WindowTypeHint.UTILITY,
@@ -112,7 +117,8 @@ UNIFORMES = {"camiseta": "Camiseta", "jaqueta": "Jaqueta", "nenhum": "Sem unifor
 PADRAO = {"nome": "Tix", "modelo": "boneco", "chapeu": "gorro", "uniforme": "camiseta", "logo": True,
           "logo_estilo": "tx", "logo_auto": True, "cor_logo": "#FFFFFF", "cor_seta": "#FF5A1F",
           "cor_corpo": None, "cor_uniforme": "#063A40", "cor_detalhe": "#FF5A1F",
-          "tamanho": 4, "velocidade": 1.0, "paredes": True, "falas": True, "lutas": True}
+          "tamanho": 4, "velocidade": 1.0, "paredes": True, "falas": True, "lutas": True,
+          "sticker": False}
 NOMES_TURMA = ["Gigi", "Biscoito", "Faísca", "Pipoca", "Rudi", "Jingle", "Turbo", "Bolinha", "Nevasca", "Cometa"]
 CORES_TURMA = [("#063A40", "#FF5A1F"), ("#1F3A93", "#FFC107"), ("#7B1E3A", "#FFFFFF"),
                ("#2E7D32", "#E53935"), ("#4A148C", "#00BCD4"), ("#263238", "#FF5A1F")]
@@ -258,7 +264,7 @@ def validar(cfg):
             cfg[k] = PADRAO[k]
     cfg["tamanho"] = int(cfg["tamanho"])
     cfg["nome"] = str(cfg.get("nome") or PADRAO["nome"]).strip()[:30] or PADRAO["nome"]
-    for k in ("logo", "logo_auto", "paredes", "falas", "lutas"):
+    for k in ("logo", "logo_auto", "paredes", "falas", "lutas", "sticker"):
         cfg[k] = bool(cfg.get(k))
     return cfg
 
@@ -353,7 +359,7 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
     uni, det = rgb(cfg["cor_uniforme"]), rgb(cfg["cor_detalhe"])
     tem_uni = cfg["uniforme"] != "nenhum"
     fase = (t // (3 if s == "work" else 5)) % 2
-    cima = (s == "drop" and el < 1.2) or s in ("party", "power", "dor") or preso
+    cima = (s == "drop" and el < 1.2) or s in ("party", "power", "dor", "defesa") or preso
     acena = (t // (4 if s == "alert" else 7)) % 2
     escala_logo = 0.5 if cfg["logo_estilo"] == "tiflux" else 1.0
 
@@ -577,7 +583,7 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
             pt(e, base, olho)
             pt(e - 1, base + 1, olho)
             pt(e + 1, base + 1, olho)
-    elif s in ("luta", "soco"):
+    elif s in ("luta", "soco", "defesa"):
         ret(e1, e1, base - 1, base, olho)
         ret(e2, e2, base - 1, base, olho)
         pt(e1 - 1, base - 3, olho)
@@ -597,13 +603,27 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
     return px
 
 
-def desenhar_sprite(cr, pixels, px, espelho):
-    """Desenha com os pés do personagem na origem atual do contexto."""
+def desenhar_sprite(cr, pixels, px, espelho, sticker=False):
+    """Desenha com os pés do personagem na origem atual do contexto.
+
+    sticker: contorno branco e sombra embaixo, como um adesivo recortado.
+    """
+    rets = []
     for c, r, cor, a, desvio, tam in pixels:
         if espelho:
             c = c + desvio if desvio is not None else ESPELHO - c
+        rets.append(((c - CX) * px, (r - PES) * px, px * tam, cor, a))
+    if sticker:
+        b = max(2.0, px * 0.6)
+        for dx, dy, cor, alfa in ((b * 0.5, b * 1.2, (0, 0, 0), 0.30), (0, 0, (1, 1, 1), 1.0)):
+            for x, y, lado, _cor, a in rets:
+                if a > 0.5:
+                    cr.rectangle(x - b + dx, y - b + dy, lado + 2 * b, lado + 2 * b)
+            cr.set_source_rgba(*cor, alfa)
+            cr.fill()
+    for x, y, lado, cor, a in rets:
         cr.set_source_rgba(*cor, a)
-        cr.rectangle((c - CX) * px, (r - PES) * px, px * tam, px * tam)
+        cr.rectangle(x, y, lado, lado)
         cr.fill()
 
 
@@ -739,11 +759,16 @@ class Efeito(Gtk.Window):
 class Mascote(Gtk.Window):
     ANGULO = {"chao": 0.0, "esq": math.pi / 2, "dir": -math.pi / 2}
 
-    def __init__(self, caminho=CONFIG):
+    def __init__(self, caminho=CONFIG, cfg=None, controle="ia"):
+        """cfg: lutador temporário do jogo, sem arquivo. controle: "ia", "jogador" (teclado) ou
+        "remoto" (o amigo controla pelo PC dele)."""
         super().__init__()
         preparar_janela(self)
-        self.caminho = caminho
-        self.cfg = carregar_config(caminho)
+        self.caminho = None if cfg else caminho
+        self.cfg = validar(dict(PADRAO, **cfg)) if cfg else carregar_config(caminho)
+        self.controle, self.vivo, self.jogo = controle, True, None
+        self.teclas, self.recarga, self.defendendo = set(), {}, False
+        self.ritmo, self.esquiva, self.arena, self.alvo_rede = 1.0, 0.12, None, None
         self.itens, self.t = [], 0
         self.S, self.win_pos, self.regiao_chave = 0, None, None
         self.px = self.cfg["tamanho"]
@@ -808,7 +833,8 @@ class Mascote(Gtk.Window):
 
     def _salvar(self):
         self.salvar_id = None
-        salvar_config(self.cfg, self.caminho)
+        if self.caminho:
+            salvar_config(self.cfg, self.caminho)
         return False
 
     def mudar(self, **valores):
@@ -1017,7 +1043,7 @@ class Mascote(Gtk.Window):
     def lutar(self, agora):
         """Um passo da luta: chega perto, soca, solta rajada ou explosão."""
         o = self.oponente
-        if o not in TURMA or o.oponente is not self:
+        if not o.vivo or o.oponente is not self:
             self.encerrar_luta()
             return
         if agora > self.luta_fim:
@@ -1025,6 +1051,8 @@ class Mascote(Gtk.Window):
                 m.encerrar_luta()
                 m.set_state("wave", 2.5)
             self.dizer("Empate! 🤝", 3, forcar=True)
+            if self.jogo:
+                self.jogo.fim(None)
             return
         if self.state in ("soco", "power", "dor") and agora < self.state_ate:
             return
@@ -1033,24 +1061,14 @@ class Mascote(Gtk.Window):
         perto = abs(dx) < 9 * (self.px + o.px) + 12
         mesma_altura = abs(o.y - self.y) < 120
         if agora >= self.luta_prox and mesma_altura:
-            self.luta_prox = agora + random.uniform(0.9, 2.0)
+            self.luta_prox = agora + random.uniform(0.9, 2.0) * self.ritmo
             sorteio = random.random()
             if perto and sorteio < 0.6:
-                self.set_state("soco", 0.35)
-                self.mover_luta(self.dir * 2 * self.px)
-                GLib.timeout_add(120, lambda: self.acertar(o, random.randint(8, 14), perto=True) and False)
+                self.golpe("soco", o)
             elif perto and sorteio > 0.88:
-                self.poder_nome, self.poder_feito = "explosao", False
-                self.set_state("power", 1.0)
-                self.dizer("Explosão de presentes! 🎁", 1.5, forcar=True)
-                GLib.timeout_add(500, lambda: self.acertar(o, random.randint(18, 26), perto=True) and False)
+                self.golpe("especial", o)
             elif abs(dx) > 6 * self.px and (perto or sorteio < 0.3):
-                self.poder_nome, self.poder_feito = "rajada", False
-                self.set_state("power", 0.9)
-                if random.random() < 0.4:
-                    self.dizer(FALAS_PODER["rajada"], 1.5, forcar=True)
-                voo = int(400 + abs(dx) / 22 * 1000 / FPS)
-                GLib.timeout_add(voo, lambda: self.acertar(o, random.randint(10, 18)) and False)
+                self.golpe("rajada", o)
             else:
                 self.luta_prox = agora + 0.5
             if self.state != "walk":
@@ -1063,23 +1081,113 @@ class Mascote(Gtk.Window):
                 self.set_state("walk", 60)
             self.mover(self.dir * 2.6 * self.cfg["velocidade"])
 
+    def golpe(self, tipo, o):
+        """Soco, rajada ou especial contra o; se acertou é conferido na hora do impacto."""
+        if tipo == "soco":
+            self.set_state("soco", 0.35)
+            self.mover_luta(self.dir * 2 * self.px)
+            GLib.timeout_add(120, lambda: self.acertar(o, random.randint(8, 14), tipo) and False)
+        elif tipo == "especial":
+            self.poder_nome, self.poder_feito = "explosao", False
+            self.set_state("power", 1.0)
+            self.dizer("Explosão de presentes! 🎁", 1.5, forcar=True)
+            GLib.timeout_add(500, lambda: self.acertar(o, random.randint(18, 26), tipo) and False)
+        else:
+            self.poder_nome, self.poder_feito = "rajada", False
+            self.set_state("power", 0.9)
+            if random.random() < 0.4:
+                self.dizer(FALAS_PODER["rajada"], 1.5, forcar=True)
+            voo = int(400 + abs(o.x - self.x) / 22 * 1000 / FPS)
+            GLib.timeout_add(voo, lambda: self.acertar(o, random.randint(10, 18), tipo) and False)
+        if self.controle == "jogador" and self.jogo:
+            self.jogo.enviar({"t": "golpe", "tipo": tipo, "dir": self.dir})
+
+    def comando(self, acao):
+        """Tecla apertada pelo jogador: pular ou atacar (cada ataque tem tempo de recarga)."""
+        agora = time.time()
+        if self.state == "ko" or (self.state in ("soco", "power", "dor") and agora < self.state_ate):
+            return
+        if acao == "pulo":
+            if self.no_chao():
+                self.vy = -14
+        elif self.oponente and agora >= self.recarga.get(acao, 0):
+            self.recarga[acao] = agora + {"soco": 0.45, "rajada": 1.2, "especial": 6.0}[acao]
+            self.golpe(acao, self.oponente)
+
+    def jogar(self, agora):
+        """Movimento do lutador controlado pelo teclado (teclas seguradas)."""
+        o = self.oponente
+        if o and not o.vivo:
+            self.encerrar_luta()
+            o = None
+        if self.state == "ko" or (self.state in ("soco", "power", "dor") and agora < self.state_ate):
+            self.defendendo = False
+            return
+        andar = ("dir" in self.teclas) - ("esq" in self.teclas)
+        self.defendendo = "def" in self.teclas and self.no_chao()
+        if self.defendendo:
+            if self.state != "defesa":
+                self.set_state("defesa", 60)
+        elif andar:
+            self.dir = andar
+            if self.state != "walk":
+                self.set_state("walk", 60)
+            self.mover_luta(andar * 3.4 * self.cfg["velocidade"])
+        else:
+            if o:
+                self.dir = 1 if o.x >= self.x else -1
+            if self.state != ("luta" if o else "idle"):
+                self.set_state("luta" if o else "idle", 60)
+
+    def seguir_rede(self):
+        """Lutador do amigo: copia a posição e o estado que o PC dele manda."""
+        a = self.alvo_rede
+        if not a:
+            return
+        _, wa = self.principal
+        tx = wa.x + a["x"] * wa.width
+        ty = wa.y + wa.height - a["alt"] * self.px
+        self.x += (tx - self.x) * 0.5
+        self.y = ty if abs(ty - self.y) < 1 else self.y + (ty - self.y) * 0.6
+        self.dir, self.hp, self.vy = a["dir"], a["hp"], 0.0
+        ocupado = self.state in ("soco", "power") and time.time() < self.state_ate
+        if a["estado"] != self.state and not ocupado:
+            self.set_state(a["estado"], 60)
+            self.vy, self.poder_feito = 0.0, True
+
     def mover_luta(self, d):
         """Empurrão ou investida no chão, sem subir parede nem atravessar degrau."""
-        nx = min(max(self.x + d, self.lim_esq), self.lim_dir)
+        lo, hi = self.arena or (self.lim_esq, self.lim_dir)
+        nx = min(max(self.x + d, lo), hi)
         if self.chao(nx, self.y) >= self.y - 3:
             self.x = nx
 
-    def acertar(self, o, dano, perto=False):
-        if self.oponente is not o or (perto and abs(o.x - self.x) > 9 * (self.px + o.px) + 40):
+    def acertar(self, o, dano, tipo="soco"):
+        if self.oponente is not o or not o.vivo or not self.vivo:
+            return
+        dx = o.x - self.x
+        if tipo != "rajada" and abs(dx) > 9 * (self.px + o.px) + 40:
+            return
+        if tipo != "especial" and dx * self.dir < 0 and abs(dx) > 4 * self.px:  # está atrás
+            return
+        if tipo == "rajada" and o.chao(o.x, o.y) - o.y > 8 * o.px:  # pulou por cima
             return
         hx, hy = o.cabeca(0.5)
         self.explosao(hx - self.dir * 6 * o.px, hy, n=14, g=0.1, dur=0.5, cores=[BRANCO, OURO, self.cor_poder()])
-        o.levar(self, dano)
+        if o.controle != "remoto":  # no online, quem apanha decide o dano no próprio PC
+            o.levar(self, dano)
 
     def levar(self, de, dano):
         if self.oponente is not de:
             return
-        if random.random() < 0.12:
+        if self.defendendo and (de.x - self.x) * self.dir >= 0:
+            dano = dano // 4
+            self.hp = max(1, self.hp - dano)
+            self.mover_luta((1 if self.x >= de.x else -1) * 2 * self.px)
+            if random.random() < 0.4:
+                self.dizer("Defendi! 🛡️", 1, forcar=True)
+            return
+        if self.controle == "ia" and random.random() < self.esquiva:
             if self.no_chao():
                 self.vy = -6
             self.dizer(random.choice(FALAS_DESVIO), 1.5, forcar=True)
@@ -1096,6 +1204,8 @@ class Mascote(Gtk.Window):
             self.set_state("ko", 5)
             self.dizer(random.choice(FALAS_KO), 3, forcar=True)
             de.vencer(self)
+            if self.jogo:
+                self.jogo.nocaute(self)
             return
         self.set_state("dor", 0.35)
         if random.random() < 0.3:
@@ -1120,11 +1230,14 @@ class Mascote(Gtk.Window):
             return
         if self.oponente:
             self.oponente.encerrar_luta()
-        TURMA.remove(self)
-        try:
-            os.remove(self.caminho)
-        except OSError:
-            pass
+        self.vivo = False
+        if self in TURMA:
+            TURMA.remove(self)
+        if self.caminho:
+            try:
+                os.remove(self.caminho)
+            except OSError:
+                pass
         for w in [self.janela_cfg, *self.itens]:
             if w:
                 w.destroy()
@@ -1197,20 +1310,27 @@ class Mascote(Gtk.Window):
             self.y, self.vy = chao, 0.0
 
     def tick(self):
-        if self not in TURMA:  # saiu da turma
+        if not self.vivo:  # saiu da turma ou do jogo
             return False
         self.t += 1
         agora = time.time()
         if not self.arrastando:
-            if self.oponente:
+            if self.controle == "remoto":
+                self.seguir_rede()
+            elif self.controle == "jogador":
+                self.jogar(agora)
+            elif self.oponente:
                 self.lutar(agora)
             elif agora >= self.state_ate:
-                self.proximo_estado()
+                if self.jogo:
+                    self.set_state("idle", 2)
+                else:
+                    self.proximo_estado()
             s, vel = self.state, self.cfg["velocidade"]
-            if self.kb and self.surf == "chao":
+            if self.kb and self.surf == "chao" and self.controle != "remoto":
                 self.mover_luta(self.kb)
                 self.kb = 0.0 if abs(self.kb) < 0.3 else self.kb * 0.8
-            if self.oponente:
+            if self.oponente or self.jogo:
                 pass
             elif s == "walk":
                 self.mover(self.dir * 1.6 * vel)
@@ -1231,7 +1351,8 @@ class Mascote(Gtk.Window):
             if agora < self.trilha_ate and self.t % 3 == 0 and not self.no_chao():
                 hx, hy = self.cabeca(0.5)
                 self.explosao(hx, hy, n=6, g=0, dur=0.5)
-            self.fisica()
+            if self.controle != "remoto":
+                self.fisica()
         self.itens = [i for i in self.itens if i.passo(agora)]
         self.reposicionar()
         self.queue_draw()
@@ -1265,7 +1386,7 @@ class Mascote(Gtk.Window):
         elif ev.button == 1:
             self.arrastando, self.arr_moveu = True, False
             self.arr_ini = (ev.x_root, ev.y_root)
-        elif ev.button == 3:
+        elif ev.button == 3 and not self.jogo:
             self.montar_menu_luta()
             self.menu.popup_at_pointer(ev)
         return True
@@ -1322,6 +1443,9 @@ class Mascote(Gtk.Window):
         it.set_submenu(poderes)
         menu.append(it)
         menu.append(Gtk.SeparatorMenuItem())
+        it = Gtk.MenuItem(label="Jogar luta 🎮…")
+        it.connect("activate", lambda _i: abrir_jogo())
+        menu.append(it)
         it = Gtk.MenuItem(label="Adicionar personagem ➕")
         it.connect("activate", lambda _i: adicionar_mascote())
         menu.append(it)
@@ -1455,7 +1579,7 @@ class Mascote(Gtk.Window):
                 k = min(1.0, el / 0.3)
                 cr.translate(0, -9 * self.px * k)
                 cr.rotate((-1 if self.dir > 0 else 1) * math.pi / 2 * k)
-            desenhar_sprite(cr, pixels, self.px, self.espelho())
+            desenhar_sprite(cr, pixels, self.px, self.espelho(), self.cfg["sticker"])
             if agora < self.dor_ate:
                 cr.set_operator(cairo.OPERATOR_ATOP)
                 cr.set_source_rgba(1, 0.15, 0.15, 0.6)
@@ -1644,8 +1768,8 @@ class Personalizar(Gtk.Window):
         self.w_vel = add("Velocidade", Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.3, 3.0, 0.1))
         self.w_vel.connect("value-changed",
                            lambda w: self.ocupado or self.app.mudar(velocidade=round(w.get_value(), 1)))
-        for rotulo, chave in (("Andar nas paredes", "paredes"), ("Falas aleatórias", "falas"),
-                              ("Lutar com a turma", "lutas")):
+        for rotulo, chave in (("Estilo sticker", "sticker"), ("Andar nas paredes", "paredes"),
+                              ("Falas aleatórias", "falas"), ("Lutar com a turma", "lutas")):
             grade.attach(Gtk.Label(label=rotulo, xalign=0), 0, self.linha, 1, 1)
             s = chave_liga(chave)
             setattr(self, "w_" + chave, s)
@@ -1691,6 +1815,7 @@ class Personalizar(Gtk.Window):
         self.w_paredes.set_active(cfg["paredes"])
         self.w_falas.set_active(cfg["falas"])
         self.w_lutas.set_active(cfg["lutas"])
+        self.w_sticker.set_active(cfg["sticker"])
         self.set_title(f"Personalizar {cfg['nome']}")
         self.ocupado = False
 
@@ -1729,7 +1854,8 @@ class Personalizar(Gtk.Window):
         px = 6
         cr.save()
         cr.translate(larg / 2, alt - 40)
-        desenhar_sprite(cr, montar_pixels(self.app.cfg, s, self.t * 3, el, andando=s == "walk"), px, False)
+        desenhar_sprite(cr, montar_pixels(self.app.cfg, s, self.t * 3, el, andando=s == "walk"), px, False,
+                        self.app.cfg["sticker"])
         cr.restore()
         lay = PangoCairo.create_layout(cr)
         lay.set_font_description(Pango.FontDescription("Sans Bold 12"))
@@ -1738,6 +1864,410 @@ class Personalizar(Gtk.Window):
         cr.set_source_rgb(0.95, 0.95, 0.95)
         cr.move_to((larg - tw) / 2, alt - 30)
         PangoCairo.show_layout(cr, lay)
+        return True
+
+
+class Rede:
+    """Conexão TCP de uma partida online: uma linha JSON por mensagem, nos dois sentidos."""
+
+    def __init__(self, ao_receber, ao_cair):
+        self.ao_receber, self.ao_cair = ao_receber, ao_cair
+        self.sock = self.srv = None
+        self.fechada = False
+        self.trava = threading.Lock()
+
+    def hospedar(self, porta):
+        self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.srv.bind(("0.0.0.0", porta))
+        self.srv.listen(1)
+        threading.Thread(target=self._aceitar, daemon=True).start()
+
+    def _aceitar(self):
+        try:
+            conexao, _ = self.srv.accept()
+        except OSError:
+            return
+        self.srv.close()
+        self._ler(conexao)
+
+    def entrar(self, host, porta):
+        threading.Thread(target=self._conectar, args=(host, porta), daemon=True).start()
+
+    def _conectar(self, host, porta):
+        try:
+            conexao = socket.create_connection((host, porta), timeout=8)
+        except OSError as e:
+            if not self.fechada:
+                GLib.idle_add(self.ao_cair, f"Não conectou em {host}:{porta} ({e.strerror or e})")
+            return
+        conexao.settimeout(None)
+        self._ler(conexao)
+
+    def _ler(self, conexao):
+        conexao.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.sock = conexao
+        GLib.idle_add(self.ao_receber, {"t": "_conectado"})
+        try:
+            for linha in conexao.makefile("rb"):
+                try:
+                    msg = json.loads(linha[:8192])
+                except ValueError:
+                    continue
+                if isinstance(msg, dict):
+                    GLib.idle_add(self.ao_receber, msg)
+        except OSError:
+            pass
+        if not self.fechada:
+            GLib.idle_add(self.ao_cair, "O amigo saiu da partida")
+
+    def enviar(self, msg):
+        if not self.sock:
+            return
+        try:
+            with self.trava:
+                self.sock.sendall((json.dumps(msg, ensure_ascii=False) + "\n").encode())
+        except OSError:
+            pass
+
+    def fechar(self):
+        self.fechada = True
+        for s in (self.sock, self.srv):
+            if s:
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                s.close()
+        self.sock = self.srv = None
+
+
+def meus_ips():
+    """IP da rede local (o que sai para a internet) e, se houver, o do Tailscale (100.x)."""
+    ips = []
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))  # UDP: só escolhe a rota, não manda nada
+            ips.append(s.getsockname()[0])
+    except OSError:
+        pass
+    try:
+        saida = subprocess.run(["hostname", "-I"], capture_output=True, text=True, timeout=2).stdout
+        ips += [ip for ip in saida.split() if ip.startswith("100.") and ip not in ips]
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return ips or ["(sem rede)"]
+
+
+JOGO = []
+
+
+def abrir_jogo():
+    if not JOGO:
+        JOGO.append(Jogo())
+    JOGO[0].show_all()
+    JOGO[0].present()
+
+
+class Jogo(Gtk.Window):
+    """Luta de stickers: você controla um lutador no teclado contra um bot ou um amigo online."""
+
+    SEGURAR = {"Left": "esq", "a": "esq", "Right": "dir", "d": "dir", "Down": "def", "s": "def"}
+    APERTAR = {"Up": "pulo", "w": "pulo", "space": "pulo", "j": "soco", "z": "soco",
+               "k": "rajada", "x": "rajada", "l": "especial", "c": "especial"}
+    BOT = {"facil": ("Fácil", 1.7, 0.04), "normal": ("Normal", 1.0, 0.12), "dificil": ("Difícil", 0.55, 0.22)}
+
+    def __init__(self):
+        super().__init__(title="Luta de stickers 🎮")
+        self.set_border_width(12)
+        self.set_keep_above(True)
+        self.set_resizable(False)
+        self.connect("delete-event", lambda *_: self.sair() or True)
+        self.connect("key-press-event", self.on_tecla, True)
+        self.connect("key-release-event", self.on_tecla, False)
+        self.eu = self.outro = self.rede = None
+        self.status, self.placar = "Escolha seu lutador e um modo", [0, 0]
+        self.amigo_cfg = None
+
+        caixa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        self.add(caixa)
+        self.tela = Gtk.DrawingArea(can_focus=True)
+        self.tela.set_size_request(420, 96)
+        self.tela.connect("draw", self.on_placar)
+        caixa.pack_start(self.tela, False, False, 0)
+
+        grade = Gtk.Grid(column_spacing=8, row_spacing=6)
+        caixa.pack_start(grade, False, False, 0)
+        principal = TURMA[0].cfg if TURMA else PADRAO
+        self.w_modelo = Gtk.ComboBoxText()
+        for ident, (rotulo, *_r) in MODELOS.items():
+            self.w_modelo.append(ident, rotulo)
+        self.w_modelo.set_active_id(principal["modelo"])
+        self.w_bot = Gtk.ComboBoxText()
+        for ident, (rotulo, *_r) in self.BOT.items():
+            self.w_bot.append(ident, rotulo)
+        self.w_bot.set_active_id("normal")
+        self.w_ip = Gtk.Entry(placeholder_text="IP do amigo (ex.: 192.168.0.12)")
+        bot = Gtk.Button(label="🤖 Lutar contra o bot")
+        bot.connect("clicked", lambda _b: self.contra_bot())
+        hospedar = Gtk.Button(label="🌐 Hospedar partida")
+        hospedar.connect("clicked", lambda _b: self.hospedar())
+        entrar = Gtk.Button(label="🔗 Entrar")
+        entrar.connect("clicked", lambda _b: self.entrar())
+        self.w_ip.connect("activate", lambda _e: self.entrar())
+        self.w_revanche = Gtk.Button(label="🔁 Revanche", sensitive=False)
+        self.w_revanche.connect("clicked", lambda _b: self.revanche())
+        parar = Gtk.Button(label="Parar")
+        parar.connect("clicked", lambda _b: self.limpar("Escolha seu lutador e um modo"))
+        linhas = [("Seu lutador", self.w_modelo, None), ("Bot", self.w_bot, bot),
+                  ("Amigo online", hospedar, None), ("", self.w_ip, entrar)]
+        for i, (rotulo, w, extra) in enumerate(linhas):
+            grade.attach(Gtk.Label(label=rotulo, xalign=0), 0, i, 1, 1)
+            w.set_hexpand(True)
+            grade.attach(w, 1, i, 1 if extra else 2, 1)
+            if extra:
+                grade.attach(extra, 2, i, 1, 1)
+        botoes = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+        botoes.pack_start(self.w_revanche, False, False, 0)
+        botoes.pack_start(parar, False, False, 0)
+        caixa.pack_start(botoes, False, False, 0)
+        ajuda = Gtk.Label(xalign=0)
+        ajuda.set_markup("<small><b>←/→</b> ou <b>A/D</b> andar · <b>↑/W/Espaço</b> pular · <b>↓/S</b> defender\n"
+                         "<b>J</b> soco · <b>K</b> rajada · <b>L</b> especial (recarga 6 s)\n"
+                         "Deixe esta janela selecionada para o teclado funcionar.\n"
+                         f"Online: o amigo entra com o seu IP; porta {PORTA_JOGO} (mesma rede, Tailscale ou ZeroTier).</small>")
+        caixa.pack_start(ajuda, False, False, 0)
+        GLib.timeout_add(50, self.passo)
+
+    # ---------- lutadores ----------
+    def cfg_lutador(self):
+        base = dict(TURMA[0].cfg) if TURMA else dict(PADRAO)
+        base.update(modelo=self.w_modelo.get_active_id() or base["modelo"], sticker=True, paredes=False,
+                    falas=True, lutas=False, tamanho=max(4, base["tamanho"]))
+        if base["modelo"] != (TURMA[0].cfg["modelo"] if TURMA else None):
+            base["cor_corpo"] = None
+        return base
+
+    def criar(self, cfg, controle, frac, direcao):
+        m = Mascote(cfg=cfg, controle=controle)
+        m.jogo, m.balao_ate = self, 0
+        _, wa = m.principal
+        m.arena = (wa.x + m.meia, wa.x + wa.width - m.meia)
+        m.x, m.y, m.dir = wa.x + frac * wa.width, wa.y + wa.height, direcao
+        return m
+
+    def esconder_turma(self, esconder):
+        for m in TURMA:
+            if esconder:
+                m.luta_cd = time.time() + 3600
+                m.hide()
+            else:
+                m.luta_cd = time.time() + 30
+                m.win_pos = m.regiao_chave = None
+                m.show()
+
+    def limpar(self, status=None):
+        if self.rede:
+            self.rede.enviar({"t": "tchau"})
+            self.rede.fechar()
+        self.rede = None
+        for m in (self.eu, self.outro):
+            if m:
+                m.remover()
+        self.eu = self.outro = None
+        self.w_revanche.set_sensitive(False)
+        self.esconder_turma(False)
+        if status:
+            self.status = status
+
+    def sair(self):
+        self.limpar("Escolha seu lutador e um modo")
+        self.hide()
+
+    def comecar(self):
+        """Começa uma rodada: vida cheia, cada um no seu canto."""
+        agora = time.time()
+        for m, frac, d in ((self.eu, self.frac_eu, 1 if self.frac_eu < 0.5 else -1),
+                           (self.outro, 1 - self.frac_eu, -1 if self.frac_eu < 0.5 else 1)):
+            _, wa = m.principal
+            m.hp, m.kb, m.vy, m.recarga = 100, 0.0, 0.0, {}
+            m.x, m.y, m.dir = wa.x + frac * wa.width, wa.y + wa.height, d
+            m.luta_prox, m.luta_fim = agora + 1.5, agora + 99
+            m.set_state("luta", 60)
+        self.eu.oponente, self.outro.oponente = self.outro, self.eu
+        self.eu.dizer("3, 2, 1… Luta! 🥊", 2, forcar=True)
+        self.w_revanche.set_sensitive(False)
+        self.status = "Lutem! 🥊"
+        self.tela.grab_focus()
+
+    def contra_bot(self):
+        self.limpar()
+        self.esconder_turma(True)
+        rotulo, ritmo, esquiva = self.BOT[self.w_bot.get_active_id() or "normal"]
+        meu = self.cfg_lutador()
+        uni, det = random.choice(CORES_TURMA)
+        modelo = random.choice([k for k in MODELOS if k != meu["modelo"]] or list(MODELOS))
+        bot = dict(PADRAO, nome=f"Bot {random.choice(NOMES_TURMA)}", modelo=modelo, chapeu=random.choice(list(CHAPEUS)),
+                   cor_uniforme=uni, cor_detalhe=det, tamanho=meu["tamanho"], sticker=True, paredes=False, lutas=False)
+        self.frac_eu, self.modo = 0.3, f"bot {rotulo.lower()}"
+        self.eu = self.criar(meu, "jogador", 0.3, 1)
+        self.outro = self.criar(bot, "ia", 0.7, -1)
+        self.outro.ritmo, self.outro.esquiva = ritmo, esquiva
+        self.comecar()
+
+    # ---------- online ----------
+    def hospedar(self):
+        self.limpar()
+        self.rede = Rede(self.on_msg, self.on_cair)
+        try:
+            self.rede.hospedar(PORTA_JOGO)
+        except OSError as e:
+            self.limpar(f"Não deu para abrir a porta {PORTA_JOGO}: {e.strerror}")
+            return
+        self.frac_eu, self.modo = 0.3, "online"
+        self.status = f"Esperando o amigo… Passe seu IP: {', '.join(meus_ips())}"
+
+    def entrar(self):
+        alvo = self.w_ip.get_text().strip()
+        if not alvo:
+            self.status = "Digite o IP do amigo que hospedou"
+            return
+        host, _, porta = alvo.partition(":")
+        self.limpar()
+        self.rede = Rede(self.on_msg, self.on_cair)
+        self.rede.entrar(host, int(porta) if porta.isdigit() else PORTA_JOGO)
+        self.frac_eu, self.modo = 0.7, "online"
+        self.status = f"Conectando em {alvo}…"
+
+    def enviar(self, msg):
+        if self.rede:
+            self.rede.enviar(msg)
+
+    def on_msg(self, msg):
+        t = msg.get("t")
+        if t == "_conectado":
+            self.enviar({"t": "ola", "versao": 1, "cfg": self.cfg_lutador()})
+            self.status = "Conectado! Esperando o lutador do amigo…"
+        elif t == "ola" and isinstance(msg.get("cfg"), dict) and not self.eu:
+            cfg = {k: v for k, v in msg["cfg"].items() if k in PADRAO}
+            cfg.update(sticker=True, paredes=False, falas=True, lutas=False)
+            if cfg.get("modelo") not in MODELOS:  # personagem próprio que eu não tenho
+                cfg["modelo"] = "boneco"
+            self.esconder_turma(True)
+            self.eu = self.criar(self.cfg_lutador(), "jogador", self.frac_eu, 1)
+            self.outro = self.criar(cfg, "remoto", 1 - self.frac_eu, -1)
+            self.comecar()
+        elif t == "pos" and self.outro:
+            try:
+                self.outro.alvo_rede = {"x": min(max(float(msg["x"]), 0.0), 1.0),
+                                        "alt": min(max(float(msg["alt"]), 0.0), 80.0),
+                                        "dir": 1 if msg.get("dir", 1) > 0 else -1,
+                                        "hp": int(min(max(msg.get("hp", 100), 0), 100)),
+                                        "estado": str(msg.get("estado", "luta"))[:10]}
+            except (KeyError, TypeError, ValueError):
+                pass
+        elif t == "golpe" and self.outro and self.eu and msg.get("tipo") in ("soco", "rajada", "especial"):
+            self.outro.dir = 1 if msg.get("dir", 1) > 0 else -1
+            self.outro.golpe(msg["tipo"], self.eu)
+        elif t == "ko" and self.outro and self.eu and self.eu.oponente:
+            self.outro.hp = 0
+            self.outro.encerrar_luta()
+            self.eu.encerrar_luta()
+            self.outro.set_state("ko", 5)
+            self.eu.vencer(self.outro)
+            self.fim(True)
+        elif t == "revanche" and self.outro and self.eu:
+            self.comecar()
+        elif t == "tchau":
+            self.on_cair("O amigo saiu da partida")
+        return False
+
+    def on_cair(self, motivo):
+        self.limpar(motivo)
+        return False
+
+    # ---------- rodada ----------
+    def nocaute(self, perdedor):
+        if perdedor is self.eu:
+            self.enviar({"t": "ko"})
+            self.fim(False)
+        elif self.modo != "online":
+            self.fim(True)
+
+    def fim(self, venceu):
+        if venceu is None:
+            self.status = "Empate! 🤝"
+        else:
+            self.placar[0 if venceu else 1] += 1
+            self.status = "Você venceu! 🏆" if venceu else "Você perdeu 😵"
+        self.w_revanche.set_sensitive(True)
+
+    def revanche(self):
+        if not (self.eu and self.outro):
+            return
+        self.enviar({"t": "revanche"})
+        self.comecar()
+
+    def passo(self):
+        if self.eu and self.rede:
+            _, wa = self.eu.principal
+            self.enviar({"t": "pos", "x": round((self.eu.x - wa.x) / wa.width, 4),
+                         "alt": round((wa.y + wa.height - self.eu.y) / self.eu.px, 2),
+                         "dir": self.eu.dir, "estado": self.eu.state, "hp": self.eu.hp})
+        if self.get_visible():
+            self.tela.queue_draw()
+        return True
+
+    def on_tecla(self, _w, ev, apertou):
+        if not self.eu or self.get_focus() is self.w_ip:
+            return False
+        nome = Gdk.keyval_name(Gdk.keyval_to_lower(ev.keyval)) or ""
+        if nome in self.SEGURAR:
+            (self.eu.teclas.add if apertou else self.eu.teclas.discard)(self.SEGURAR[nome])
+            return True
+        if nome in self.APERTAR:
+            if apertou:
+                self.eu.comando(self.APERTAR[nome])
+            return True
+        return False
+
+    def on_placar(self, w, cr):
+        larg, alt = w.get_allocated_width(), w.get_allocated_height()
+        cr.set_source_rgb(0.11, 0.12, 0.14)
+        cr.rectangle(0, 0, larg, alt)
+        cr.fill()
+
+        def texto(t, x, y, tam=10, cor=(0.95, 0.95, 0.95), centro=False):
+            lay = PangoCairo.create_layout(cr)
+            lay.set_font_description(Pango.FontDescription(f"Sans Bold {tam}"))
+            lay.set_text(t, -1)
+            tw, _ = lay.get_pixel_size()
+            cr.set_source_rgb(*cor)
+            cr.move_to(x - tw / 2 if centro else x, y)
+            PangoCairo.show_layout(cr, lay)
+
+        for i, m in enumerate((self.eu, self.outro)):
+            if not m:
+                continue
+            bx, bw = (12, larg / 2 - 24) if i == 0 else (larg / 2 + 12, larg / 2 - 24)
+            rotulo = f"Você · {m.cfg['nome']}" if i == 0 else m.cfg["nome"]
+            texto(rotulo, bx, 8)
+            cr.set_source_rgb(0.25, 0.25, 0.28)
+            cr.rectangle(bx, 28, bw, 12)
+            cr.fill()
+            f = m.hp / 100
+            cr.set_source_rgb(*(VERDE if f > 0.5 else OURO if f > 0.25 else VERMELHO))
+            if i == 0:
+                cr.rectangle(bx, 28, bw * f, 12)
+            else:
+                cr.rectangle(bx + bw * (1 - f), 28, bw * f, 12)
+            cr.fill()
+        if self.eu:
+            prontos = " ".join(f"{k} {'✓' if time.time() >= self.eu.recarga.get(k, 0) else '…'}"
+                               for k in ("rajada", "especial"))
+            texto(prontos, 12, 44, 8, (0.7, 0.75, 0.8))
+            texto(f"{self.placar[0]} × {self.placar[1]}", larg / 2, 44, 9, centro=True)
+        texto(self.status, larg / 2, 64, 11, LARANJA_TX if self.eu else (0.85, 0.85, 0.85), centro=True)
         return True
 
 
@@ -1759,6 +2289,8 @@ def rotear(caminho, dados):
             a.desafiar(b)
     elif caminho == "/remover":
         alvo.remover()
+    elif caminho == "/jogar":
+        abrir_jogo()
     elif caminho in ("/falar", "/config"):
         alvo.on_http(caminho, dados)
     else:

@@ -44,7 +44,7 @@ As mudanças aparecem na hora e ficam salvas em `~/.config/mascote-tx/config.jso
 | Logo | estilos `t›x`, `» setas` e `tiflux`. Cores automáticas (contrastam com o fundo) ou cor da logo e cor da seta escolhidas; a cor da seta também colore os poderes |
 | Cores | corpo, uniforme e detalhe |
 | Tamanho / velocidade | de 2 a 12 / de 0,3 a 3 (atalhos **Maior** e **Menor** no menu) |
-| Andar nas paredes, falas aleatórias, lutar com a turma | liga e desliga |
+| Estilo sticker, andar nas paredes, falas aleatórias, lutar com a turma | liga e desliga |
 
 ### Personagem próprio
 
@@ -76,6 +76,36 @@ chapéu e cores). Cada um tem o próprio **Personalizar…** e fica salvo em
 - Quem zera a vida cai nocauteado com estrelinhas, e o vencedor comemora. Depois de 45 s sem
   nocaute, dá empate.
 - Só o principal reage ao Claude Code; quando o Claude termina, a turma toda comemora junto.
+
+## Luta de stickers 🎮 (você joga)
+
+Clique direito → **Jogar luta 🎮…** (ou `./mascote.sh jogar`). Escolha seu lutador e lute no
+teclado contra um bot ou contra um amigo no PC dele. Os lutadores aparecem em cima da barra do
+monitor principal com estilo sticker (contorno branco e sombra); a turma some durante o jogo e
+volta quando você fecha a janela.
+
+| Tecla | Ação |
+|---|---|
+| ← → ou A D | andar |
+| ↑, W ou Espaço | pular (pula por cima da rajada) |
+| ↓ ou S | defender (o golpe de frente tira só 1/4) |
+| J | soco |
+| K | rajada (recarga 1,2 s) |
+| L | especial: explosão de presentes (recarga 6 s) |
+
+A janela do jogo precisa estar selecionada para o teclado funcionar.
+
+- **Bot**: fácil, normal ou difícil (ataca mais rápido e desvia mais).
+- **Amigo online**: os dois instalam o mascote. Um clica **Hospedar partida** e passa o IP que
+  aparece; o outro digita esse IP e clica **Entrar**. Cada um controla o seu lutador e vê a
+  mesma luta na própria tela. Usa a porta TCP 47950 (`MASCOTE_JOGO_PORTA` muda).
+  - Mesma rede (casa, escritório): funciona direto.
+  - Casas diferentes: instalem o [Tailscale](https://tailscale.com) ou o ZeroTier (grátis) e usem
+    o IP 100.x que ele dá, ou libere a porta 47950 no roteador de quem hospeda.
+  - Se o firewall bloquear: `sudo ufw allow 47950/tcp` em quem hospeda.
+- **Revanche** começa outra rodada; o placar conta as vitórias da sessão.
+
+O estilo sticker também pode ser ligado no seu mascote em **Personalizar… → Estilo sticker**.
 
 ## Poderes
 
@@ -117,6 +147,7 @@ python3 instalar_hooks.py --remover
 ./mascote.sh nevar
 ./mascote.sh poder rajada            # rajada, explosao, teleporte, superpulo, aura, nevasca
 ./mascote.sh config nome '"Rudolfo"'  # muda qualquer opção do principal (o valor é JSON)
+./mascote.sh jogar                   # abre a Luta de stickers (bot ou amigo online)
 ./mascote.sh adicionar rena Rudi     # novo personagem (modelo e nome opcionais)
 ./mascote.sh lutar Tix Rudi          # luta entre dois (sem nomes: o principal contra um sorteado)
 ./mascote.sh remover Rudi            # tira um personagem extra da turma
@@ -132,6 +163,7 @@ API local em `127.0.0.1:47900`:
 | `POST /adicionar` | `{"modelo", "nome"}`, os dois opcionais |
 | `POST /lutar` | `{"a", "b"}`: nomes dos lutadores (opcionais) |
 | `POST /remover` | `{"mascote": "nome"}` |
+| `POST /jogar` | abre a janela da Luta de stickers |
 | `GET /` | status, posição, último evento e a turma (vida e adversário de cada um) |
 
 Variáveis: `MASCOTE_PORTA` (padrão 47900), `MASCOTE_CONFIG` (arquivo de configuração; a turma
