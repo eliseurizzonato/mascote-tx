@@ -1,0 +1,17 @@
+{
+  "nome": "Coruja",
+  "cor": "#7A5C46",
+  "cores": {"y": "#F2B33D"},
+  "olhos": true,
+  "desenho": [
+    "..C............C..",
+    "..CC..........CC..",
+    "..CCCCCCCCCCCCCC..",
+    "..CCCCCCCCCCCCCC..",
+    "..CBBBBCCCCBBBBC..",
+    "..CBBBBCCCCBBBBC..",
+    "..CBBBBCCCCBBBBC..",
+    "..CCCCCCyyCCCCCC..",
+    "..cCCCCCCCCCCCCc.."
+  ]
+}

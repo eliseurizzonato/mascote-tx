@@ -1,0 +1,7 @@
+# prints da tela, pacote gerado e ferramentas de teste locais
+evidencias/
+dist/
+__pycache__/
+*.pyc
+shot.sh
+print_tela.py
