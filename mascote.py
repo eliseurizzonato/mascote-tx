@@ -42,6 +42,7 @@ CONF_DIR = os.path.expanduser("~/.config/mascote-tx")
 CONFIG = os.environ.get("MASCOTE_CONFIG") or os.path.join(CONF_DIR, "config.json")
 TURMA_DIR = os.path.join(os.path.dirname(CONFIG), "turma")  # um .json por personagem extra
 TURMA = []  # mascotes na tela; o primeiro é o principal (recebe os eventos do Claude Code)
+REPO_URL = "https://github.com/eliseurizzonato/mascote-tx"
 PORTA_JOGO = int(os.environ.get("MASCOTE_JOGO_PORTA", "47950"))  # partida online com amigo
 FPS = 30
 GRAV = 1.1
@@ -2037,7 +2038,54 @@ class Jogo(Gtk.Window):
                          "Deixe esta janela selecionada para o teclado funcionar.\n"
                          f"Online: o amigo entra com o seu IP; porta {PORTA_JOGO} (mesma rede, Tailscale ou ZeroTier).</small>")
         caixa.pack_start(ajuda, False, False, 0)
+        caixa.pack_start(self.painel_instrucoes(), False, False, 0)
         GLib.timeout_add(50, self.passo)
+
+    def convite(self):
+        ip = meus_ips()[0]
+        return (f"Bora lutar no Mascote TX! 🎮\n\n"
+                f"1. Instalar (primeira vez):\n"
+                f"git clone {REPO_URL}.git && cd mascote-tx && ./instalar.sh\n\n"
+                f"   Já tem instalado? Atualize na pasta onde clonou:\n"
+                f"git pull && ./instalar.sh\n\n"
+                f"2. Clique direito no mascote → Jogar luta 🎮…\n"
+                f"3. Digite o meu IP ({ip}) e clique em Entrar.\n\n"
+                f"Teclas: ←/→ andar · ↑ pular · ↓ defender · J soco · K rajada · L especial")
+
+    def painel_instrucoes(self):
+        """Painel com os comandos para instalar/atualizar e o passo a passo para chamar um amigo."""
+        painel = Gtk.Expander(label="📋 Instruções para jogar com um amigo")
+        caixa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_top=6)
+        painel.add(caixa)
+
+        def comando(rotulo, texto):
+            caixa.pack_start(Gtk.Label(label=rotulo, xalign=0), False, False, 0)
+            linha = Gtk.Box(spacing=6)
+            cmd = Gtk.Label(xalign=0, selectable=True, wrap=True, max_width_chars=48)
+            cmd.set_markup(f"<tt>{GLib.markup_escape_text(texto)}</tt>")
+            copiar = Gtk.Button(label="Copiar", valign=Gtk.Align.CENTER)
+            copiar.connect("clicked", lambda _b: self.copiar(texto, f"Comando copiado: {rotulo.lower()}"))
+            linha.pack_start(cmd, True, True, 0)
+            linha.pack_start(copiar, False, False, 0)
+            caixa.pack_start(linha, False, False, 0)
+
+        comando("1. Instalar (primeira vez)", f"git clone {REPO_URL}.git && cd mascote-tx && ./instalar.sh")
+        comando("   Atualizar (na pasta onde clonou)", "git pull && ./instalar.sh")
+        passos = Gtk.Label(xalign=0, wrap=True, max_width_chars=56)
+        passos.set_markup("2. Os dois abrem <b>Jogar luta 🎮…</b> no clique direito do mascote.\n"
+                          "3. Um clica em <b>Hospedar partida</b> e passa o IP que aparece.\n"
+                          "4. O outro digita esse IP e clica em <b>Entrar</b>.\n"
+                          f"<small>Casas diferentes: Tailscale/ZeroTier ou porta {PORTA_JOGO} liberada. "
+                          f"Firewall: <tt>sudo ufw allow {PORTA_JOGO}/tcp</tt> em quem hospeda.</small>")
+        caixa.pack_start(passos, False, False, 0)
+        botao = Gtk.Button(label="✉️ Copiar convite completo para mandar ao amigo")
+        botao.connect("clicked", lambda _b: self.copiar(self.convite(), "Convite copiado! Cole no WhatsApp/Slack"))
+        caixa.pack_start(botao, False, False, 0)
+        return painel
+
+    def copiar(self, texto, aviso):
+        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(texto, -1)
+        self.status = aviso
 
     # ---------- lutadores ----------
     def cfg_lutador(self):

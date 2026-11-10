@@ -104,6 +104,10 @@ A janela do jogo precisa estar selecionada para o teclado funcionar.
     o IP 100.x que ele dá, ou libere a porta 47950 no roteador de quem hospeda.
   - Se o firewall bloquear: `sudo ufw allow 47950/tcp` em quem hospeda.
 - **Revanche** começa outra rodada; o placar conta as vitórias da sessão.
+- O painel **📋 Instruções para jogar com um amigo**, na janela do jogo, mostra os comandos de
+  instalar e atualizar (com botão **Copiar**) e o passo a passo. **Copiar convite completo** põe
+  na área de transferência uma mensagem pronta, com os comandos e o seu IP, para colar no
+  WhatsApp ou Slack.
 
 O estilo sticker também pode ser ligado no seu mascote em **Personalizar… → Estilo sticker**.
 
