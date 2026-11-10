@@ -73,7 +73,7 @@ chapéu e cores). Cada um tem o próprio **Personalizar…** e fica salvo em
   também se desafiam sozinhos de vez em quando (depois de uma luta, cada um descansa 90 s).
 - Na luta eles correm um até o outro, pulam, dão voadoras, combos de socos com chute, rajadas TX
   e explosões de presentes, e recuam. Cada golpe tira vida (barra e número acima da cabeça),
-  arremessa, treme e pisca de vermelho; às vezes o golpe é desviado.
+  arremessa rodando, treme e pisca de vermelho; às vezes o golpe é desviado.
 - Quem zera a vida cai nocauteado com estrelinhas, e o vencedor comemora. Depois de 45 s sem
   nocaute, dá empate.
 - Só o principal reage ao Claude Code; quando o Claude termina, a turma toda comemora junto.
@@ -93,6 +93,34 @@ volta quando você fecha a janela.
 | J | soco. Três seguidos fecham com um chute; correndo, vira investida; no ar, voadora |
 | K | rajada (recarga 0,9 s) |
 | L | especial: explosão de presentes (recarga 5 s) |
+
+### Física maluca, armas e vantagens
+
+- **Física exagerada**: golpe forte arremessa o lutador rodando; ele quica no chão e bate na
+  borda da tela e volta. O pulo duplo é uma cambalhota.
+- **Armas em presentes 🎁**: de tempos em tempos cai um presente; encoste nele para pegar a arma.
+  O bot também vai buscar.
+
+  | Arma | Tecla | Efeito | Usos |
+  |---|---|---|---|
+  | Bengala | J | golpe com mais alcance, arremessa | 8 |
+  | Martelo do Noel | J | lento, dano alto, arremessa longe rodando | 4 |
+  | Canhão de neve | K | tiro que congela o adversário por 1 s | 5 |
+
+- **Vantagens (roguelite)**: no fim de cada rodada você escolhe 1 de 3 vantagens, que se somam
+  até fechar a janela ou trocar de partida. Contra o bot, ele ganha uma sorteada a cada rodada.
+
+  | Vantagem | Efeito (por nível) |
+  |---|---|
+  | ❤️ Vida | +20 de vida máxima (até 5×) |
+  | ⚡ Velocidade | +15% (até 4×) |
+  | 💪 Força | +20% de dano (até 5×) |
+  | 🦘 Pulo triplo | mais um pulo no ar |
+  | ⏱️ Recarga | golpes e poderes 25% mais rápidos (até 3×) |
+  | 🧛 Vampiro | recupera 25% do dano que causa (até 3×) |
+  | 🛡️ Casca | leva 15% menos dano (até 3×) |
+
+  No online, os presentes saem no PC de quem hospeda e as armas e vantagens aparecem para os dois.
 
 A luta roda a 60 quadros por segundo, com impacto que congela a tela por um instante, tremida,
 faíscas e o dano subindo em número. Quem leva 4 golpes seguidos é arremessado e fica intocável
