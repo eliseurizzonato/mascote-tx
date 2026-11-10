@@ -423,7 +423,7 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
                 ret(21, 21, 8, 9, borda)
             else:
                 braco(1, baixo)
-        dy_chapeu, olhos = -8, (6, 9, -2, BRANCO, False)
+        dy_chapeu, olhos, pe_cor = -8, (6, 9, -2, BRANCO, False), escuro
     else:
         perna = BICO if modelo == "pinguim" else corpo_e
         for i, c in enumerate((5, 7, 12, 14)):
@@ -523,10 +523,14 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
             else:
                 ret(17, 17, 9, 10, manga)
                 ret(18, 18, 9, 10, mao)
+        pe_cor = perna
         olho = CIANO if modelo == "tix" else OLHO
         dy_chapeu = 0
         olhos = None if (proprio and not proprio["olhos"]) else (6, 13, 5, olho, modelo != "tix")
 
+    if s in ("chute", "chute_ar"):  # perna esticada para a frente
+        ret(13, 18, 13, 14, pe_cor)
+        ret(19, 19, 12, 14, det)
     # chapéu e presente, deslocados para cima no Boneco TX
     dy[0] = dy_chapeu
     if modelo == "rena" or cfg["chapeu"] == "chifres":
@@ -584,7 +588,7 @@ def montar_pixels(cfg, s, t, el, andando=False, no_ar=False, preso=False):
             pt(e, base, olho)
             pt(e - 1, base + 1, olho)
             pt(e + 1, base + 1, olho)
-    elif s in ("luta", "soco", "defesa"):
+    elif s in ("luta", "soco", "defesa", "chute", "chute_ar"):
         ret(e1, e1, base - 1, base, olho)
         ret(e2, e2, base - 1, base, olho)
         pt(e1 - 1, base - 3, olho)
@@ -760,7 +764,7 @@ class Efeito(Gtk.Window):
 class Mascote(Gtk.Window):
     ANGULO = {"chao": 0.0, "esq": math.pi / 2, "dir": -math.pi / 2}
 
-    def __init__(self, caminho=CONFIG, cfg=None, controle="ia"):
+    def __init__(self, caminho=CONFIG, cfg=None, controle="ia", rapido=False):
         """cfg: lutador temporário do jogo, sem arquivo. controle: "ia", "jogador" (teclado) ou
         "remoto" (o amigo controla pelo PC dele)."""
         super().__init__()
@@ -770,6 +774,11 @@ class Mascote(Gtk.Window):
         self.controle, self.vivo, self.jogo = controle, True, None
         self.teclas, self.recarga, self.defendendo = set(), {}, False
         self.ritmo, self.esquiva, self.arena, self.alvo_rede = 1.0, 0.12, None, None
+        self.dt, self.sub = (0.5 if rapido else 1.0), 0.0  # rápido: 60 quadros/s (lutadores do jogo)
+        self.vx, self.pulos, self.combo, self.ultimo_soco, self.voadora_ok = 0.0, 0, 0, 0.0, True
+        self.recuo_ate = self.congelado_ate = self.intocavel_ate = 0.0
+        self.apanhou = []  # horários dos últimos golpes levados (quebra combo infinito)
+        self.poder_atraso, self.particulas, self.numeros = 0.4, [], []
         self.itens, self.t = [], 0
         self.S, self.win_pos, self.regiao_chave = 0, None, None
         self.px = self.cfg["tamanho"]
@@ -790,7 +799,7 @@ class Mascote(Gtk.Window):
         self.aura_ate = self.trilha_ate = 0.0
         self.oculto, self.duplo = False, False
         self.poder_nome, self.poder_feito = "", True
-        self.oponente, self.hp, self.kb = None, 100, 0.0
+        self.oponente, self.hp = None, 100
         self.luta_prox = self.luta_fim = self.luta_cd = self.dor_ate = self.barra_ate = 0.0
 
         self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK
@@ -805,7 +814,7 @@ class Mascote(Gtk.Window):
         self.show_all()
         self.set_state("wave", 3)
         self.dizer(f"Ho ho ho! {self.cfg['nome']} chegou 🎅", 4)
-        GLib.timeout_add(1000 // FPS, self.tick)
+        GLib.timeout_add(int(1000 * self.dt / FPS), self.tick)
 
     # ---------- configuração ----------
     def aplicar_config(self, salvar=True):
@@ -967,7 +976,7 @@ class Mascote(Gtk.Window):
             nome = random.choice(list(PODERES))
         if nome == "superpulo" and self.surf != "chao":
             nome = "rajada"
-        self.poder_nome, self.poder_feito = nome, False
+        self.poder_nome, self.poder_feito, self.poder_atraso = nome, False, 0.4
         self.set_state("power", 1.3)
         self.dizer(FALAS_PODER[nome], 2.5, forcar=True)
 
@@ -1034,15 +1043,58 @@ class Mascote(Gtk.Window):
         for m, o in ((self, outro), (outro, self)):
             if m.surf != "chao":
                 m.descer_parede()
-            m.oponente, m.hp, m.kb = o, 100, 0.0
+            m.oponente, m.hp = o, 100
             m.luta_prox, m.luta_fim = agora + random.uniform(1.0, 2.0), agora + 45
             m.set_state("luta", 60)
         self.dizer(f"{outro.cfg['nome']}, bora lutar! 🥊", 2.5, forcar=True)
         outro.dizer(random.choice(FALAS_DESAFIO), 2.5, forcar=True)
         return True
 
+    # Luta: velocidades em px por quadro de 1/30 s; dt é a fração desse quadro em cada tick.
+    ANDAR, CORRER, PULO, PULO2 = 5.5, 9.5, 16.0, 13.0
+    DURACAO = {"soco": 0.18, "chute": 0.3, "investida": 0.32}
+    RECARGA = {"soco": 0.2, "chute": 0.5, "investida": 0.6, "voadora": 0.6, "rajada": 0.9, "especial": 5.0}
+
+    def ocupado(self, agora):
+        if self.state == "chute_ar":
+            return not self.no_chao()
+        return self.state in ("soco", "chute", "investida", "power", "dor") and agora < self.state_ate
+
+    def acelerar(self, alvo, correr=False, virar=False, base=None):
+        """Acelera até a velocidade de andar/correr (ou freia, com alvo 0) e anda."""
+        vmax = (self.CORRER if correr else self.ANDAR) * self.cfg["velocidade"]
+        if base is None:
+            base = 0.45 if self.no_chao() else 0.18
+        self.vx += (alvo * vmax - self.vx) * (1 - (1 - base) ** self.dt)
+        if abs(self.vx) < 0.05:
+            self.vx = 0.0
+        if virar and alvo:
+            self.dir = alvo
+        if self.vx:
+            antes = self.x
+            if self.arena is None and self.no_chao() and not self.ocupado(time.time()):
+                self.mover(self.vx * self.dt)  # luta da turma: atravessa monitores
+            else:
+                self.mover_luta(self.vx * self.dt)
+            if self.x == antes:
+                self.vx = 0.0
+        if abs(self.vx) > self.ANDAR + 1 and self.no_chao() and self.t % 3 == 0 and self.sub < self.dt:
+            self.poeira()
+
+    def pular(self):
+        if self.no_chao():
+            self.vy, self.pulos = -self.PULO, 1
+            self.poeira(6)
+        elif self.pulos == 1 and self.state != "chute_ar":
+            self.vy, self.pulos = -self.PULO2, 2
+            self.faisca(self.x, self.y - 2 * self.px, 10, [BRANCO, GELO, self.cor_poder()], vel=(1, 4), g=0.05)
+
+    def soltar_pulo(self):
+        if self.vy < -6:
+            self.vy *= 0.55
+
     def lutar(self, agora):
-        """Um passo da luta: chega perto, soca, solta rajada ou explosão."""
+        """IA da luta: corre até o adversário, pula, faz combos, rajadas, voadoras e recua."""
         o = self.oponente
         if not o.vivo or o.oponente is not self:
             self.encerrar_luta()
@@ -1055,65 +1107,96 @@ class Mascote(Gtk.Window):
             if self.jogo:
                 self.jogo.fim(None)
             return
-        if self.state in ("soco", "power", "dor") and agora < self.state_ate:
+        if self.surf != "chao":
+            self.descer_parede()
+        if self.ocupado(agora):
+            self.acelerar(0, base=0.12)
             return
         dx = o.x - self.x
+        dist = abs(dx)
+        perto = dist < 9 * (self.px + o.px) + 12
+        vem_rajada = o.state == "power" and o.poder_nome == "rajada" and (self.x - o.x) * o.dir > 0
+        if vem_rajada and self.no_chao() and random.random() < self.esquiva * 0.5:
+            self.pular()
+        if agora < self.recuo_ate:
+            self.dir = 1 if dx >= 0 else -1
+            self.acelerar(-self.dir)
+            self.state != "walk" and self.set_state("walk", 60)
+            return
         self.dir = 1 if dx >= 0 else -1
-        perto = abs(dx) < 9 * (self.px + o.px) + 12
-        mesma_altura = abs(o.y - self.y) < 120
-        if agora >= self.luta_prox and mesma_altura:
-            self.luta_prox = agora + random.uniform(0.9, 2.0) * self.ritmo
-            sorteio = random.random()
-            if perto and sorteio < 0.6:
-                self.golpe("soco", o)
-            elif perto and sorteio > 0.88:
-                self.golpe("especial", o)
-            elif abs(dx) > 6 * self.px and (perto or sorteio < 0.3):
-                self.golpe("rajada", o)
-            else:
-                self.luta_prox = agora + 0.5
-            if self.state != "walk":
-                return
+        if agora >= self.luta_prox and abs(o.y - self.y) < 160:
+            self.luta_prox = agora + random.uniform(0.3, 0.9) * self.ritmo
+            r = random.random()
+            if not self.no_chao() and dist < 9 * (self.px + o.px) + 90:
+                self.comando("soco")  # no ar vira voadora
+            elif perto and r < 0.7:
+                self.comando("soco")
+                for i in range(1, 3 if random.random() < 0.7 / self.ritmo else 1):
+                    GLib.timeout_add(230 * i, lambda: self.comando("soco") and False)
+            elif perto and r < 0.82:
+                self.recuo_ate = agora + random.uniform(0.25, 0.6)
+            elif perto and r > 0.94:
+                self.comando("especial")
+            elif not perto and r < 0.35:
+                self.comando("rajada")
+            elif self.no_chao() and r < 0.6:
+                self.pular()
         if perto:
-            if self.state != "luta":
-                self.set_state("luta", 60)
+            self.acelerar(0)
+            self.state not in ("luta", "chute_ar") and self.set_state("luta", 60)
         else:
-            if self.state != "walk":
-                self.set_state("walk", 60)
-            self.mover(self.dir * 2.6 * self.cfg["velocidade"])
+            self.acelerar(self.dir, correr=dist > 260)
+            self.state != "walk" and self.set_state("walk", 60)
 
     def golpe(self, tipo, o):
-        """Soco, rajada ou especial contra o; se acertou é conferido na hora do impacto."""
-        if tipo == "soco":
-            self.set_state("soco", 0.35)
-            self.mover_luta(self.dir * 2 * self.px)
-            GLib.timeout_add(120, lambda: self.acertar(o, random.randint(8, 14), tipo) and False)
+        """Executa o golpe; se acertou é conferido na hora do impacto (acertar)."""
+        if tipo in self.DURACAO:
+            self.set_state("chute" if tipo == "chute" else "soco", self.DURACAO[tipo])
+            self.vx = self.dir * (15 if tipo == "investida" else 3)
+            atraso, dano = {"soco": (60, (4, 7)), "chute": (110, (9, 12)), "investida": (120, (8, 11))}[tipo]
+            GLib.timeout_add(atraso, lambda: self.acertar(o, random.randint(*dano), tipo) and False)
+        elif tipo == "voadora":
+            self.set_state("chute_ar", 3)
+            self.vy, self.vx, self.voadora_ok = max(self.vy, 0) + 9, self.dir * 11, False
         elif tipo == "especial":
-            self.poder_nome, self.poder_feito = "explosao", False
-            self.set_state("power", 1.0)
+            self.poder_nome, self.poder_feito, self.poder_atraso = "explosao", False, 0.25
+            self.set_state("power", 0.6)
             self.dizer("Explosão de presentes! 🎁", 1.5, forcar=True)
-            GLib.timeout_add(500, lambda: self.acertar(o, random.randint(18, 26), tipo) and False)
+            GLib.timeout_add(300, lambda: self.acertar(o, random.randint(14, 18), tipo) and False)
         else:
-            self.poder_nome, self.poder_feito = "rajada", False
-            self.set_state("power", 0.9)
-            if random.random() < 0.4:
-                self.dizer(FALAS_PODER["rajada"], 1.5, forcar=True)
-            voo = int(400 + abs(o.x - self.x) / 22 * 1000 / FPS)
-            GLib.timeout_add(voo, lambda: self.acertar(o, random.randint(10, 18), tipo) and False)
+            self.poder_nome, self.poder_feito, self.poder_atraso = "rajada", False, 0.1
+            self.set_state("power", 0.4)
+            if random.random() < 0.3:
+                self.dizer(FALAS_PODER["rajada"], 1.2, forcar=True)
+            voo = int(100 + abs(o.x - self.x) / 22 * 1000 / FPS)
+            GLib.timeout_add(voo, lambda: self.acertar(o, random.randint(7, 11), tipo) and False)
         if self.controle == "jogador" and self.jogo:
             self.jogo.enviar({"t": "golpe", "tipo": tipo, "dir": self.dir})
 
     def comando(self, acao):
-        """Tecla apertada pelo jogador: pular ou atacar (cada ataque tem tempo de recarga)."""
+        """Pular ou atacar. Soco no ar vira voadora; três socos seguidos fecham com chute;
+        soco correndo vira investida."""
         agora = time.time()
-        if self.state == "ko" or (self.state in ("soco", "power", "dor") and agora < self.state_ate):
+        if self.state == "ko" or self.ocupado(agora):
             return
         if acao == "pulo":
-            if self.no_chao():
-                self.vy = -14
-        elif self.oponente and agora >= self.recarga.get(acao, 0):
-            self.recarga[acao] = agora + {"soco": 0.45, "rajada": 1.2, "especial": 6.0}[acao]
-            self.golpe(acao, self.oponente)
+            self.pular()
+            return
+        if not self.oponente:
+            return
+        if acao == "soco" and not self.no_chao():
+            acao = "voadora"
+        elif acao == "soco":
+            self.combo = self.combo + 1 if agora - self.ultimo_soco < 0.5 else 1
+            self.ultimo_soco = agora
+            if self.combo >= 3:
+                acao, self.combo = "chute", 0
+            elif abs(self.vx) > self.ANDAR + 1:
+                acao = "investida"
+        if agora < self.recarga.get(acao, 0):
+            return
+        self.recarga[acao] = agora + self.RECARGA[acao]
+        self.golpe(acao, self.oponente)
 
     def jogar(self, agora):
         """Movimento do lutador controlado pelo teclado (teclas seguradas)."""
@@ -1121,24 +1204,31 @@ class Mascote(Gtk.Window):
         if o and not o.vivo:
             self.encerrar_luta()
             o = None
-        if self.state == "ko" or (self.state in ("soco", "power", "dor") and agora < self.state_ate):
+        if self.state == "ko" or self.ocupado(agora):
             self.defendendo = False
+            self.acelerar(0, base=0.12 if self.state in ("dor", "chute_ar") else 0.3)
             return
         andar = ("dir" in self.teclas) - ("esq" in self.teclas)
-        self.defendendo = "def" in self.teclas and self.no_chao()
+        chao = self.no_chao()
+        self.defendendo = "def" in self.teclas and chao
         if self.defendendo:
-            if self.state != "defesa":
-                self.set_state("defesa", 60)
-        elif andar:
-            self.dir = andar
-            if self.state != "walk":
-                self.set_state("walk", 60)
-            self.mover_luta(andar * 3.4 * self.cfg["velocidade"])
+            self.acelerar(0)
+            novo = "defesa"
         else:
-            if o:
+            self.acelerar(andar, correr="correr" in self.teclas, virar=True)
+            if not andar and o and chao:
                 self.dir = 1 if o.x >= self.x else -1
-            if self.state != ("luta" if o else "idle"):
-                self.set_state("luta" if o else "idle", 60)
+            novo = "walk" if andar and chao else ("luta" if o else "idle")
+        if self.state != novo:
+            self.set_state(novo, 60)
+
+    def checar_voadora(self):
+        o = self.oponente
+        if self.state != "chute_ar" or self.voadora_ok or not o:
+            return
+        if abs(o.x - self.x) < 9 * (self.px + o.px) and abs(o.y - self.y) < 14 * self.px:
+            self.voadora_ok = True
+            self.acertar(o, random.randint(8, 11), "voadora")
 
     def seguir_rede(self):
         """Lutador do amigo: copia a posição e o estado que o PC dele manda."""
@@ -1150,8 +1240,10 @@ class Mascote(Gtk.Window):
         ty = wa.y + wa.height - a["alt"] * self.px
         self.x += (tx - self.x) * 0.5
         self.y = ty if abs(ty - self.y) < 1 else self.y + (ty - self.y) * 0.6
+        if a["hp"] < self.hp:  # o dano é decidido no PC do amigo: mostra o número aqui também
+            self.numero(f"-{self.hp - a['hp']}", BRANCO)
         self.dir, self.hp, self.vy = a["dir"], a["hp"], 0.0
-        ocupado = self.state in ("soco", "power") and time.time() < self.state_ate
+        ocupado = self.state in ("soco", "chute", "power", "chute_ar") and time.time() < self.state_ate
         if a["estado"] != self.state and not ocupado:
             self.set_state(a["estado"], 60)
             self.vy, self.poder_feito = 0.0, True
@@ -1167,50 +1259,82 @@ class Mascote(Gtk.Window):
         if self.oponente is not o or not o.vivo or not self.vivo:
             return
         dx = o.x - self.x
-        if tipo != "rajada" and abs(dx) > 9 * (self.px + o.px) + 40:
+        alcance = 9 * (self.px + o.px) + (70 if tipo == "investida" else 30)
+        if tipo not in ("rajada", "voadora") and abs(dx) > alcance:
             return
-        if tipo != "especial" and dx * self.dir < 0 and abs(dx) > 4 * self.px:  # está atrás
+        if tipo not in ("especial", "voadora") and dx * self.dir < 0 and abs(dx) > 4 * self.px:  # está atrás
             return
         if tipo == "rajada" and o.chao(o.x, o.y) - o.y > 8 * o.px:  # pulou por cima
             return
         hx, hy = o.cabeca(0.5)
-        self.explosao(hx - self.dir * 6 * o.px, hy, n=14, g=0.1, dur=0.5, cores=[BRANCO, OURO, self.cor_poder()])
+        forte = tipo in ("chute", "investida", "voadora", "especial")
+        o.faisca(hx - self.dir * 6 * o.px, hy, 22 if forte else 12, [BRANCO, OURO, self.cor_poder()])
+        congela = time.time() + (0.09 if forte else 0.05)
+        self.congelado_ate = o.congelado_ate = congela
         if o.controle != "remoto":  # no online, quem apanha decide o dano no próprio PC
-            o.levar(self, dano)
+            o.levar(self, dano, tipo)
 
-    def levar(self, de, dano):
-        if self.oponente is not de:
+    def levar(self, de, dano, tipo="soco"):
+        agora = time.time()
+        if self.oponente is not de or agora < self.intocavel_ate:
             return
+        longe = 1 if self.x >= de.x else -1
         if self.defendendo and (de.x - self.x) * self.dir >= 0:
             dano = dano // 4
             self.hp = max(1, self.hp - dano)
-            self.mover_luta((1 if self.x >= de.x else -1) * 2 * self.px)
+            self.vx = longe * 4
+            self.numero(f"-{dano}", GELO)
             if random.random() < 0.4:
                 self.dizer("Defendi! 🛡️", 1, forcar=True)
             return
         if self.controle == "ia" and random.random() < self.esquiva:
+            self.vx = longe * 8
             if self.no_chao():
-                self.vy = -6
-            self.dizer(random.choice(FALAS_DESVIO), 1.5, forcar=True)
+                self.vy = -7
+            self.dizer(random.choice(FALAS_DESVIO), 1.2, forcar=True)
             return
+        self.apanhou = [t for t in self.apanhou if agora - t < 1.5] + [agora]
+        forte = tipo in ("chute", "investida", "voadora", "especial") or len(self.apanhou) >= 4
+        if len(self.apanhou) >= 4:  # 4 golpes seguidos: é arremessado e fica intocável um instante
+            self.apanhou, self.intocavel_ate = [], agora + 0.7
         self.hp = max(0, self.hp - dano)
-        self.kb = (1 if self.x >= de.x else -1) * (4 + dano * 0.4)
+        self.numero(f"-{dano}", OURO if forte else BRANCO)
+        self.vx = longe * (11 if forte else 5)
+        self.vy = -9 if forte else min(self.vy, -3)
         self.dor_ate = time.time() + 0.25
-        if self.no_chao():
-            self.vy = -4
         if self.hp <= 0:
             self.encerrar_luta()
             de.encerrar_luta()
-            self.kb *= 1.8
+            self.vx, self.vy = longe * 14, -11
             self.set_state("ko", 5)
             self.dizer(random.choice(FALAS_KO), 3, forcar=True)
             de.vencer(self)
             if self.jogo:
                 self.jogo.nocaute(self)
             return
-        self.set_state("dor", 0.35)
-        if random.random() < 0.3:
-            self.dizer(random.choice(FALAS_DOR), 1.2, forcar=True)
+        self.set_state("dor", 0.4 if forte else 0.25)
+        if random.random() < 0.25:
+            self.dizer(random.choice(FALAS_DOR), 1, forcar=True)
+
+    # ---------- partículas desenhadas na própria janela (leves: sem abrir janelas) ----------
+    def faisca(self, x, y, n, cores, vel=(1.5, 6.0), g=0.15, dur=0.45):
+        fim = time.time() + dur
+        for _ in range(n):
+            ang, v = random.uniform(0, 2 * math.pi), random.uniform(*vel)
+            self.particulas.append([x, y, math.cos(ang) * v, math.sin(ang) * v - 1, g, random.choice(cores),
+                                    max(2, self.px - 1), fim - random.uniform(0, dur * 0.4)])
+        del self.particulas[:-150]
+
+    def poeira(self, n=3):
+        fim = time.time() + 0.35
+        for _ in range(n):
+            self.particulas.append([self.x - self.dir * 3 * self.px, self.y - 2, random.uniform(-1.5, 1.5) - self.vx * 0.15,
+                                    random.uniform(-2.2, -0.6), 0.1, (0.85, 0.86, 0.9), max(2, self.px - 2), fim])
+        del self.particulas[:-150]
+
+    def numero(self, texto, cor):
+        self.numeros.append((texto, cor, time.time()))
+        del self.numeros[:-6]
 
     def vencer(self, perdedor):
         self.set_state("party", 3.5)
@@ -1303,19 +1427,26 @@ class Mascote(Gtk.Window):
             return
         chao = self.chao(self.x, self.y)
         if self.y < chao or self.vy < 0:
-            self.vy += GRAV
-            self.y += self.vy
+            self.vy += GRAV * self.dt
+            self.y += self.vy * self.dt
             if self.y >= chao and self.vy > 0:
-                self.y, self.vy = chao, 0.0
+                if self.vy > 12 and self.oponente:
+                    self.poeira(5)
+                self.y, self.vy, self.pulos = chao, 0.0, 0
+                if self.state == "chute_ar" and self.controle != "remoto":
+                    self.set_state("luta" if self.oponente else "idle", 60)
         else:
             self.y, self.vy = chao, 0.0
 
     def tick(self):
         if not self.vivo:  # saiu da turma ou do jogo
             return False
-        self.t += 1
+        self.sub += self.dt
+        quadro = self.sub >= 0.999  # completou um quadro de 1/30 s: anima e move os efeitos
+        if quadro:
+            self.sub, self.t = 0.0, self.t + 1
         agora = time.time()
-        if not self.arrastando:
+        if not self.arrastando and agora >= self.congelado_ate:
             if self.controle == "remoto":
                 self.seguir_rede()
             elif self.controle == "jogador":
@@ -1328,9 +1459,8 @@ class Mascote(Gtk.Window):
                 else:
                     self.proximo_estado()
             s, vel = self.state, self.cfg["velocidade"]
-            if self.kb and self.surf == "chao" and self.controle != "remoto":
-                self.mover_luta(self.kb)
-                self.kb = 0.0 if abs(self.kb) < 0.3 else self.kb * 0.8
+            if self.vx and not self.oponente and self.controle == "ia" and self.surf == "chao":
+                self.acelerar(0, base=0.15)  # escorrega do empurrão final (nocaute)
             if self.oponente or self.jogo:
                 pass
             elif s == "walk":
@@ -1346,21 +1476,27 @@ class Mascote(Gtk.Window):
             if s == "drop" and not self.soltou and agora - self.state_ini > 1.2:
                 self.soltou = True
                 self.soltar(random.choice(SOLTAVEIS))
-            if s == "power" and not self.poder_feito and agora - self.state_ini > 0.4:
+            if s == "power" and not self.poder_feito and agora - self.state_ini > self.poder_atraso:
                 self.poder_feito = True
                 self.executar_poder(self.poder_nome)
-            if agora < self.trilha_ate and self.t % 3 == 0 and not self.no_chao():
+            self.checar_voadora()
+            if quadro and agora < self.trilha_ate and self.t % 3 == 0 and not self.no_chao():
                 hx, hy = self.cabeca(0.5)
                 self.explosao(hx, hy, n=6, g=0, dur=0.5)
             if self.controle != "remoto":
                 self.fisica()
-        self.itens = [i for i in self.itens if i.passo(agora)]
+        if quadro:
+            self.itens = [i for i in self.itens if i.passo(agora)]
+            for p in self.particulas:
+                p[0], p[1], p[3] = p[0] + p[2], p[1] + p[3], p[3] + p[4]
+            self.particulas = [p for p in self.particulas if p[7] > agora]
         self.reposicionar()
         self.queue_draw()
         return True
 
     def reposicionar(self):
-        self.win_x = int(round(self.x - self.S / 2))
+        tremor = random.randint(-3, 3) if time.time() < self.dor_ate else 0
+        self.win_x = int(round(self.x - self.S / 2)) + tremor
         self.win_y = int(round(self.y - self.S / 2))
         if self.win_pos != (self.win_x, self.win_y):
             self.win_pos = (self.win_x, self.win_y)
@@ -1587,7 +1723,24 @@ class Mascote(Gtk.Window):
                 cr.paint()
             cr.pop_group_to_source()
             cr.paint()
+        for x, y, _vx, _vy, _g, cor, tam, fim in self.particulas:
+            cr.set_source_rgba(*cor, max(0.0, min(1.0, (fim - agora) / 0.2)))
+            cr.rectangle(x - self.win_x - tam / 2, y - self.win_y - tam / 2, tam, tam)
+            cr.fill()
         hx, hy = self.cabeca()
+        self.numeros = [n for n in self.numeros if agora - n[2] < 0.8]
+        for i, (texto, cor, ini) in enumerate(self.numeros):
+            k = (agora - ini) / 0.8
+            lay = PangoCairo.create_layout(cr)
+            lay.set_font_description(Pango.FontDescription(f"Sans Heavy {12 + self.px}"))
+            lay.set_text(texto, -1)
+            cr.move_to(hx - self.win_x + 4 + 10 * i, hy - self.win_y - 34 - 6 * self.px - 40 * k)
+            PangoCairo.layout_path(cr, lay)
+            cr.set_line_width(4)
+            cr.set_source_rgba(0.1, 0.05, 0.05, 1 - k)
+            cr.stroke_preserve()
+            cr.set_source_rgba(*cor, 1 - k)
+            cr.fill()
         if self.state == "ko":
             self.desenhar_estrelas(cr, self.x - self.win_x - self.dir * 16 * self.px, self.y - self.win_y - 9 * self.px)
         elif self.oponente or agora < self.barra_ate:
@@ -1973,7 +2126,8 @@ def abrir_jogo():
 class Jogo(Gtk.Window):
     """Luta de stickers: você controla um lutador no teclado contra um bot ou um amigo online."""
 
-    SEGURAR = {"Left": "esq", "a": "esq", "Right": "dir", "d": "dir", "Down": "def", "s": "def"}
+    SEGURAR = {"Left": "esq", "a": "esq", "Right": "dir", "d": "dir", "Down": "def", "s": "def",
+               "Shift_L": "correr", "Shift_R": "correr"}
     APERTAR = {"Up": "pulo", "w": "pulo", "space": "pulo", "j": "soco", "z": "soco",
                "k": "rajada", "x": "rajada", "l": "especial", "c": "especial"}
     BOT = {"facil": ("Fácil", 1.7, 0.04), "normal": ("Normal", 1.0, 0.12), "dificil": ("Difícil", 0.55, 0.22)}
@@ -1989,6 +2143,7 @@ class Jogo(Gtk.Window):
         self.eu = self.outro = self.rede = None
         self.status, self.placar = "Escolha seu lutador e um modo", [0, 0]
         self.amigo_cfg = None
+        self.ultima_seta, self.ultima_seta_em, self.corrida_seta = None, 0.0, False
 
         caixa = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.add(caixa)
@@ -2033,13 +2188,15 @@ class Jogo(Gtk.Window):
         botoes.pack_start(parar, False, False, 0)
         caixa.pack_start(botoes, False, False, 0)
         ajuda = Gtk.Label(xalign=0)
-        ajuda.set_markup("<small><b>←/→</b> ou <b>A/D</b> andar · <b>↑/W/Espaço</b> pular · <b>↓/S</b> defender\n"
-                         "<b>J</b> soco · <b>K</b> rajada · <b>L</b> especial (recarga 6 s)\n"
+        ajuda.set_markup("<small><b>←/→</b> ou <b>A/D</b> andar (<b>Shift</b> ou toque duplo: correr) · "
+                         "<b>↑/W/Espaço</b> pular (2× no ar: pulo duplo) · <b>↓/S</b> defender\n"
+                         "<b>J</b> soco (3× seguido: combo com chute; correndo: investida; no ar: voadora) · "
+                         "<b>K</b> rajada · <b>L</b> especial\n"
                          "Deixe esta janela selecionada para o teclado funcionar.\n"
                          f"Online: o amigo entra com o seu IP; porta {PORTA_JOGO} (mesma rede, Tailscale ou ZeroTier).</small>")
         caixa.pack_start(ajuda, False, False, 0)
         caixa.pack_start(self.painel_instrucoes(), False, False, 0)
-        GLib.timeout_add(50, self.passo)
+        GLib.timeout_add(33, self.passo)
 
     def convite(self):
         ip = meus_ips()[0]
@@ -2050,7 +2207,8 @@ class Jogo(Gtk.Window):
                 f"git pull && ./instalar.sh\n\n"
                 f"2. Clique direito no mascote → Jogar luta 🎮…\n"
                 f"3. Digite o meu IP ({ip}) e clique em Entrar.\n\n"
-                f"Teclas: ←/→ andar · ↑ pular · ↓ defender · J soco · K rajada · L especial")
+                f"Teclas: ←/→ andar (Shift corre) · ↑ pular (2× pulo duplo) · ↓ defender · "
+                f"J soco/combo/voadora · K rajada · L especial")
 
     def painel_instrucoes(self):
         """Painel com os comandos para instalar/atualizar e o passo a passo para chamar um amigo."""
@@ -2097,7 +2255,7 @@ class Jogo(Gtk.Window):
         return base
 
     def criar(self, cfg, controle, frac, direcao):
-        m = Mascote(cfg=cfg, controle=controle)
+        m = Mascote(cfg=cfg, controle=controle, rapido=True)
         m.jogo, m.balao_ate = self, 0
         _, wa = m.principal
         m.arena = (wa.x + m.meia, wa.x + wa.width - m.meia)
@@ -2138,7 +2296,7 @@ class Jogo(Gtk.Window):
         for m, frac, d in ((self.eu, self.frac_eu, 1 if self.frac_eu < 0.5 else -1),
                            (self.outro, 1 - self.frac_eu, -1 if self.frac_eu < 0.5 else 1)):
             _, wa = m.principal
-            m.hp, m.kb, m.vy, m.recarga = 100, 0.0, 0.0, {}
+            m.hp, m.vx, m.vy, m.recarga = 100, 0.0, 0.0, {}
             m.x, m.y, m.dir = wa.x + frac * wa.width, wa.y + wa.height, d
             m.luta_prox, m.luta_fim = agora + 1.5, agora + 99
             m.set_state("luta", 60)
@@ -2214,7 +2372,7 @@ class Jogo(Gtk.Window):
                                         "estado": str(msg.get("estado", "luta"))[:10]}
             except (KeyError, TypeError, ValueError):
                 pass
-        elif t == "golpe" and self.outro and self.eu and msg.get("tipo") in ("soco", "rajada", "especial"):
+        elif t == "golpe" and self.outro and self.eu and msg.get("tipo") in ("soco", "chute", "investida", "voadora", "rajada", "especial"):
             self.outro.dir = 1 if msg.get("dir", 1) > 0 else -1
             self.outro.golpe(msg["tipo"], self.eu)
         elif t == "ko" and self.outro and self.eu and self.eu.oponente:
@@ -2270,12 +2428,24 @@ class Jogo(Gtk.Window):
         if not self.eu or self.get_focus() is self.w_ip:
             return False
         nome = Gdk.keyval_name(Gdk.keyval_to_lower(ev.keyval)) or ""
-        if nome in self.SEGURAR:
-            (self.eu.teclas.add if apertou else self.eu.teclas.discard)(self.SEGURAR[nome])
+        acao = self.SEGURAR.get(nome)
+        if acao:
+            agora = time.time()
+            if acao in ("esq", "dir") and apertou and acao not in self.eu.teclas:
+                if self.ultima_seta == acao and agora - self.ultima_seta_em < 0.28:  # toque duplo: corre
+                    self.eu.teclas.add("correr")
+                    self.corrida_seta = True
+                self.ultima_seta, self.ultima_seta_em = acao, agora
+            if acao in ("esq", "dir") and not apertou and self.corrida_seta:
+                self.eu.teclas.discard("correr")
+                self.corrida_seta = False
+            (self.eu.teclas.add if apertou else self.eu.teclas.discard)(acao)
             return True
         if nome in self.APERTAR:
             if apertou:
                 self.eu.comando(self.APERTAR[nome])
+            elif self.APERTAR[nome] == "pulo":
+                self.eu.soltar_pulo()
             return True
         return False
 

@@ -71,8 +71,9 @@ chapéu e cores). Cada um tem o próprio **Personalizar…** e fica salvo em
 
 - **Lutar com 🥊** (clique direito) escolhe o adversário. Com **Lutas automáticas** ligado, eles
   também se desafiam sozinhos de vez em quando (depois de uma luta, cada um descansa 90 s).
-- Na luta eles se aproximam, trocam socos, rajadas TX e explosões de presentes. Cada golpe tira
-  vida (barra acima da cabeça), empurra e pisca de vermelho; às vezes o golpe é desviado.
+- Na luta eles correm um até o outro, pulam, dão voadoras, combos de socos com chute, rajadas TX
+  e explosões de presentes, e recuam. Cada golpe tira vida (barra e número acima da cabeça),
+  arremessa, treme e pisca de vermelho; às vezes o golpe é desviado.
 - Quem zera a vida cai nocauteado com estrelinhas, e o vencedor comemora. Depois de 45 s sem
   nocaute, dá empate.
 - Só o principal reage ao Claude Code; quando o Claude termina, a turma toda comemora junto.
@@ -86,12 +87,16 @@ volta quando você fecha a janela.
 
 | Tecla | Ação |
 |---|---|
-| ← → ou A D | andar |
-| ↑, W ou Espaço | pular (pula por cima da rajada) |
+| ← → ou A D | andar; com **Shift** segurado ou dois toques rápidos, correr |
+| ↑, W ou Espaço | pular (pula por cima da rajada); de novo no ar, pulo duplo; soltar cedo pula mais baixo |
 | ↓ ou S | defender (o golpe de frente tira só 1/4) |
-| J | soco |
-| K | rajada (recarga 1,2 s) |
-| L | especial: explosão de presentes (recarga 6 s) |
+| J | soco. Três seguidos fecham com um chute; correndo, vira investida; no ar, voadora |
+| K | rajada (recarga 0,9 s) |
+| L | especial: explosão de presentes (recarga 5 s) |
+
+A luta roda a 60 quadros por segundo, com impacto que congela a tela por um instante, tremida,
+faíscas e o dano subindo em número. Quem leva 4 golpes seguidos é arremessado e fica intocável
+por um instante, para ninguém ficar preso num combo infinito.
 
 A janela do jogo precisa estar selecionada para o teclado funcionar.
 
