@@ -128,7 +128,7 @@ UNIFORMES = {"camiseta": "Camiseta", "jaqueta": "Jaqueta", "nenhum": "Sem unifor
 PADRAO = {"nome": "Tix", "modelo": "boneco", "chapeu": "gorro", "uniforme": "camiseta", "logo": True,
           "logo_estilo": "tx", "logo_auto": True, "cor_logo": "#FFFFFF", "cor_seta": "#FF5A1F",
           "cor_corpo": None, "cor_uniforme": "#063A40", "cor_detalhe": "#FF5A1F",
-          "tamanho": 4, "velocidade": 1.0, "paredes": True, "falas": True, "lutas": True,
+          "tamanho": 4, "tamanho_luta": 3, "velocidade": 1.0, "paredes": True, "falas": True, "lutas": True,
           "sticker": False}
 NOMES_TURMA = ["Gigi", "Biscoito", "Faísca", "Pipoca", "Rudi", "Jingle", "Turbo", "Bolinha", "Nevasca", "Cometa"]
 CORES_TURMA = [("#063A40", "#FF5A1F"), ("#1F3A93", "#FFC107"), ("#7B1E3A", "#FFFFFF"),
@@ -268,12 +268,12 @@ def validar(cfg):
             cfg[k] = PADRAO[k]
     if cfg.get("cor_corpo") is not None and not HEX.fullmatch(str(cfg["cor_corpo"])):
         cfg["cor_corpo"] = None
-    for k, lo, hi in (("tamanho", 2, 12), ("velocidade", 0.3, 3.0)):
+    for k, lo, hi in (("tamanho", 2, 12), ("tamanho_luta", 2, 8), ("velocidade", 0.3, 3.0)):
         try:
             cfg[k] = min(max(float(cfg.get(k)), lo), hi)
         except (TypeError, ValueError):
             cfg[k] = PADRAO[k]
-    cfg["tamanho"] = int(cfg["tamanho"])
+    cfg["tamanho"], cfg["tamanho_luta"] = int(cfg["tamanho"]), int(cfg["tamanho_luta"])
     cfg["nome"] = str(cfg.get("nome") or PADRAO["nome"]).strip()[:30] or PADRAO["nome"]
     for k in ("logo", "logo_auto", "paredes", "falas", "lutas", "sticker"):
         cfg[k] = bool(cfg.get(k))
@@ -2297,6 +2297,12 @@ class Jogo(Gtk.Window):
         for ident, (rotulo, *_r) in self.BOT.items():
             self.w_bot.append(ident, rotulo)
         self.w_bot.set_active_id("normal")
+        self.w_tamanho = Gtk.ComboBoxText()
+        for ident, rotulo in self.TAMANHOS.items():
+            self.w_tamanho.append(ident, rotulo)
+        salvo = str(principal.get("tamanho_luta", 3))
+        self.w_tamanho.set_active_id(salvo if salvo in self.TAMANHOS else "3")
+        self.w_tamanho.connect("changed", lambda _c: self.mudar_tamanho())
         self.w_ip = Gtk.Entry(placeholder_text="IP do amigo (ex.: 192.168.0.12)")
         bot = Gtk.Button(label="🤖 Lutar contra o bot")
         bot.connect("clicked", lambda _b: self.contra_bot())
@@ -2309,7 +2315,7 @@ class Jogo(Gtk.Window):
         self.w_revanche.connect("clicked", lambda _b: self.revanche())
         parar = Gtk.Button(label="Parar")
         parar.connect("clicked", lambda _b: self.limpar("Escolha seu lutador e um modo"))
-        linhas = [("Seu lutador", self.w_modelo, None), ("Bot", self.w_bot, bot),
+        linhas = [("Seu lutador", self.w_modelo, None), ("Tamanho", self.w_tamanho, None), ("Bot", self.w_bot, bot),
                   ("Amigo online", hospedar, None), ("", self.w_ip, entrar)]
         for i, (rotulo, w, extra) in enumerate(linhas):
             grade.attach(Gtk.Label(label=rotulo, xalign=0), 0, i, 1, 1)
@@ -2384,10 +2390,28 @@ class Jogo(Gtk.Window):
     def cfg_lutador(self):
         base = dict(TURMA[0].cfg) if TURMA else dict(PADRAO)
         base.update(modelo=self.w_modelo.get_active_id() or base["modelo"], sticker=True, paredes=False,
-                    falas=True, lutas=False, tamanho=max(4, base["tamanho"]))
+                    falas=True, lutas=False, tamanho=self.tamanho())
         if base["modelo"] != (TURMA[0].cfg["modelo"] if TURMA else None):
             base["cor_corpo"] = None
         return base
+
+    TAMANHOS = {"2": "Mini", "3": "Pequeno", "4": "Médio", "6": "Grande"}
+
+    def tamanho(self):
+        return int(self.w_tamanho.get_active_id() or 3)
+
+    def mudar_tamanho(self):
+        """Muda o tamanho dos lutadores na hora (os dois, na sua tela) e lembra a escolha."""
+        px = self.tamanho()
+        if TURMA and TURMA[0].cfg.get("tamanho_luta") != px:
+            TURMA[0].cfg["tamanho_luta"] = px
+            TURMA[0]._salvar()
+        for m in (self.eu, self.outro):
+            if m:
+                m.mudar(tamanho=px)
+                _, wa = m.principal
+                m.arena = (wa.x + m.meia, wa.x + wa.width - m.meia)
+        self.tela.grab_focus()
 
     def criar(self, cfg, controle, frac, direcao):
         m = Mascote(cfg=cfg, controle=controle, rapido=True)
@@ -2498,7 +2522,7 @@ class Jogo(Gtk.Window):
             self.status = "Conectado! Esperando o lutador do amigo…"
         elif t == "ola" and isinstance(msg.get("cfg"), dict) and not self.eu:
             cfg = {k: v for k, v in msg["cfg"].items() if k in PADRAO}
-            cfg.update(sticker=True, paredes=False, falas=True, lutas=False)
+            cfg.update(sticker=True, paredes=False, falas=True, lutas=False, tamanho=self.tamanho())
             if cfg.get("modelo") not in MODELOS:  # personagem próprio que eu não tenho
                 cfg["modelo"] = "boneco"
             self.esconder_turma(True)

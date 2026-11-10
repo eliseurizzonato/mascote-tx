@@ -126,7 +126,9 @@ A luta roda a 60 quadros por segundo, com impacto que congela a tela por um inst
 faíscas e o dano subindo em número. Quem leva 4 golpes seguidos é arremessado e fica intocável
 por um instante, para ninguém ficar preso num combo infinito.
 
-A janela do jogo precisa estar selecionada para o teclado funcionar.
+A janela do jogo precisa estar selecionada para o teclado funcionar. O campo **Tamanho** (Mini,
+Pequeno, Médio, Grande) muda os lutadores na hora, também no meio da luta, e fica salvo; o
+padrão é Pequeno. No online, o lutador do amigo aparece no tamanho que você escolheu.
 
 - **Bot**: fácil, normal ou difícil (ataca mais rápido e desvia mais).
 - **Amigo online**: os dois instalam o mascote. Um clica **Hospedar partida** e passa o IP que
