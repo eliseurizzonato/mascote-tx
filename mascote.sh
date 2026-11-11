@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# Também atende pelo comando "avatar" (atalho em ~/.local/bin criado pelo instalar.sh): só "avatar" abre o mascote.
 # mascote.sh iniciar | parar | reiniciar | status | personalizar | falar "texto" [item] | nevar | poder [nome]
 #            | config chave valor | jogar | adicionar [modelo] [nome] | lutar [nome] [nome] | remover nome
 set -euo pipefail
-DIR="$(cd "$(dirname "$0")" && pwd)"
+DIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 PORTA="${MASCOTE_PORTA:-47900}"
 URL="http://127.0.0.1:$PORTA"
 LOG="${XDG_RUNTIME_DIR:-/tmp}/mascote-tx-$PORTA.log"
@@ -11,7 +12,11 @@ PID="${XDG_RUNTIME_DIR:-/tmp}/mascote-tx-$PORTA.pid"
 case "${1:-iniciar}" in
   iniciar|personalizar)
     if curl -sf "$URL/" >/dev/null; then
-      [ "$1" = personalizar ] && { "$0" parar; sleep 1; } || { echo "já está rodando"; exit 0; }
+      if [ "${1:-iniciar}" = personalizar ]; then "$0" parar; sleep 1
+      else
+        curl -s -X POST "$URL/falar" -d '{"texto":"Tô aqui! 👋","acao":"wave"}' >/dev/null
+        echo "já está rodando (deu tchau para você)"; exit 0
+      fi
     fi
     extra=""; [ "${1:-}" = personalizar ] && extra="--personalizar"
     GDK_BACKEND=x11 DISPLAY="${DISPLAY:-:0}" nohup python3 "$DIR/mascote.py" $extra >"$LOG" 2>&1 &

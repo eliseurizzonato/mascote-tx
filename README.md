@@ -19,7 +19,8 @@ extraia e rode `./instalar.sh` dentro da pasta.
 
 O instalador confere as bibliotecas (e diz o comando para instalar as que faltarem), copia o
 mascote para `~/.local/share/mascote-tx`, coloca no menu de aplicativos e para abrir junto com o
-computador, pergunta se é para ligar ao Claude Code (se você usa) e abre o mascote. Para atualizar,
+computador, cria o comando `avatar` no terminal, pergunta se é para ligar ao Claude Code (se
+você usa) e abre o mascote. Para atualizar,
 rode `git pull` e `./instalar.sh` de novo. Para desinstalar: `~/.local/share/mascote-tx/instalar.sh --remover`.
 
 Não funciona no Windows nem no macOS. No Wayland roda via XWayland e pode não ficar em cima da
@@ -177,6 +178,11 @@ sozinhos de vez em quando e às vezes quando o Claude termina.
 | Subagente | "Um elfo entrou na oficina", solta estrela ou biscoito |
 
 ## Comandos
+
+Depois de instalar, digite **`avatar`** em qualquer terminal: abre o mascote (se já estiver
+aberto, ele dá tchau). O `avatar` aceita os mesmos comandos do `mascote.sh`: `avatar parar`,
+`avatar reiniciar`, `avatar jogar`, `avatar personalizar` etc. Ele é um atalho em
+`~/.local/bin/avatar`; se o terminal não achar, abra um terminal novo.
 
 ```bash
 ./mascote.sh iniciar | parar | reiniciar | status | personalizar

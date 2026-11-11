@@ -7,12 +7,14 @@ ORIGEM="$(cd "$(dirname "$0")" && pwd)"
 DESTINO="${XDG_DATA_HOME:-$HOME/.local/share}/mascote-tx"
 AUTOSTART="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/mascote-tx.desktop"
 MENU="${XDG_DATA_HOME:-$HOME/.local/share}/applications/mascote-tx.desktop"
+ATALHO="$HOME/.local/bin/avatar"
 
 if [ "${1:-}" = "--remover" ]; then
   [ -x "$DESTINO/mascote.sh" ] && "$DESTINO/mascote.sh" parar || true
   if [ -f "$HOME/.claude/settings.json" ] && [ -f "$DESTINO/instalar_hooks.py" ]; then
     python3 "$DESTINO/instalar_hooks.py" --remover
   fi
+  [ -L "$ATALHO" ] && [ "$(readlink -f "$ATALHO")" = "$DESTINO/mascote.sh" ] && rm -f "$ATALHO"
   rm -rf "$DESTINO" "$AUTOSTART" "$MENU"
   echo "Mascote TX removido. Suas configurações continuam em ~/.config/mascote-tx."
   exit 0
@@ -33,6 +35,13 @@ mkdir -p "$DESTINO" "$(dirname "$AUTOSTART")" "$(dirname "$MENU")"
 [ "$ORIGEM" = "$(cd "$DESTINO" && pwd)" ] || cp -r "$ORIGEM/mascote.py" "$ORIGEM/mascote.sh" "$ORIGEM/instalar_hooks.py" "$ORIGEM/instalar.sh" \
   "$ORIGEM/personagens" "$ORIGEM/README.md" "$DESTINO/"
 chmod +x "$DESTINO/mascote.sh" "$DESTINO/instalar.sh"
+mkdir -p "$(dirname "$ATALHO")"
+if [ -e "$ATALHO" ] && [ ! -L "$ATALHO" ]; then
+  echo "aviso: já existe $ATALHO (não é do mascote); o comando avatar não foi criado"
+else
+  ln -sfn "$DESTINO/mascote.sh" "$ATALHO"
+  case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) echo "aviso: ~/.local/bin não está no PATH; abra um terminal novo ou adicione ao ~/.bashrc";; esac
+fi
 
 for arq in "$AUTOSTART" "$MENU"; do
   cat >"$arq" <<DESK
@@ -62,4 +71,4 @@ fi
 echo
 echo "Pronto! O Mascote TX abre sozinho quando você liga o computador e está no menu de aplicativos."
 echo "Clique direito nele para personalizar, adicionar personagens e lutar."
-echo "Comandos: $DESTINO/mascote.sh iniciar|parar|personalizar|adicionar|lutar ..."
+echo "Digite avatar no terminal para abrir o mascote. Outros: avatar parar|reiniciar|jogar|personalizar|adicionar|lutar ..."
